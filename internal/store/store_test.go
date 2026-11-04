@@ -1,0 +1,380 @@
+package store
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"hash/fnv"
+	"math"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/tomRumi/harness-memory-service/internal/index"
+)
+
+type bag struct {
+	fail atomic.Bool
+}
+
+var wordRe = regexp.MustCompile(`[\p{L}\p{N}_]+`)
+
+func (b *bag) vec(text string) []float32 {
+	v := make([]float32, 32)
+	for _, w := range wordRe.FindAllString(strings.ToLower(text), -1) {
+		h := fnv.New32a()
+		h.Write([]byte(w))
+		v[h.Sum32()%32]++
+	}
+	var s float64
+	for _, x := range v {
+		s += float64(x * x)
+	}
+	if s == 0 {
+		v[0], s = 1, 1
+	}
+	for i := range v {
+		v[i] /= float32(math.Sqrt(s))
+	}
+	return v
+}
+func (b *bag) Model() string { return "bag" }
+func (b *bag) Docs(ctx context.Context, t []string) ([][]float32, error) {
+	if b.fail.Load() {
+		return nil, errors.New("embedder down")
+	}
+	o := make([][]float32, len(t))
+	for i, x := range t {
+		o[i] = b.vec(x)
+	}
+	return o, nil
+}
+func (b *bag) Query(ctx context.Context, t string) ([]float32, error) {
+	if b.fail.Load() {
+		return nil, errors.New("embedder down")
+	}
+	return b.vec(t), nil
+}
+
+func newStore(t *testing.T) (*Store, *bag, string) {
+	t.Helper()
+	home := t.TempDir()
+	repo := filepath.Join(home, "memory")
+	for _, d := range []string{"wiki", "notes", "facts"} {
+		os.MkdirAll(filepath.Join(repo, d), 0o755)
+	}
+	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"config", "user.email", "t@example.invalid"}, {"config", "user.name", "t"}} {
+		if out, err := exec.Command("git", append([]string{"-C", repo}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	db, err := index.Open(filepath.Join(home, "index.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	e := &bag{}
+	st, err := New(repo, db, e, NewCommitter(repo, 50*time.Millisecond), filepath.Join(home, "events.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	return st, e, repo
+}
+
+func countFiles(t *testing.T, dir string) int {
+	n := 0
+	filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && strings.HasSuffix(p, ".md") {
+			n++
+		}
+		return nil
+	})
+	return n
+}
+
+func TestDetIDIsStableAndLooksLikeAUUID(t *testing.T) {
+	a, b := DetID("mem", "hello"), DetID("mem", "hello")
+	if a != b || !regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`).MatchString(a) {
+		t.Fatalf("%s %s", a, b)
+	}
+	if DetID("mem", "hello") == DetID("fact", "hello") || DetID("mem", "a") == DetID("mem", "b") {
+		t.Fatal("ids must differ by prefix and text")
+	}
+}
+
+func TestLearnIsIdempotentAndWritesAReadableNote(t *testing.T) {
+	st, _, repo := newStore(t)
+	ctx := context.Background()
+	id1, err := st.Learn(ctx, "  The daemon keeps its state in one directory.  ", "proj", "rag:gotcha", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id2, _ := st.Learn(ctx, "The daemon keeps its state in one directory.", "proj", "rag:gotcha", "")
+	if id1 != id2 || countFiles(t, filepath.Join(repo, "notes")) != 1 {
+		t.Fatalf("not idempotent: %s %s, %d files", id1, id2, countFiles(t, filepath.Join(repo, "notes")))
+	}
+	raw, _ := os.ReadFile(filepath.Join(repo, "notes", "proj", id1+".md"))
+	for _, want := range []string{"kind: rag:gotcha", "status: active", "created:", "The daemon keeps its state"} {
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("note file lacks %q:\n%s", want, raw)
+		}
+	}
+	// it is searchable at once, and has a vector
+	hits, _ := st.DB.Keyword("daemon state directory", index.Filter{Kinds: []string{"note"}})
+	if len(hits) != 1 {
+		t.Fatalf("not indexed: %+v", hits)
+	}
+	if miss, total, _ := st.DB.Pending("bag"); miss != 0 || total != 1 {
+		t.Fatalf("not embedded: %d of %d", miss, total)
+	}
+	// empty text and a bad project name are refused
+	if _, err := st.Learn(ctx, "   ", "proj", "x", ""); err == nil {
+		t.Fatal("empty learning accepted")
+	}
+	if _, err := st.Learn(ctx, "text", "../evil", "x", ""); err == nil {
+		t.Fatal("path-like project accepted")
+	}
+	// long text is cut at 500 characters
+	long := strings.Repeat("word ", 200)
+	id3, _ := st.Learn(ctx, long, "proj", "x", "")
+	raw, _ = os.ReadFile(filepath.Join(repo, "notes", "proj", id3+".md"))
+	if n := len([]rune(strings.TrimSpace(strings.SplitN(string(raw), "---\n", 3)[2]))); n > MaxNote {
+		t.Fatalf("note body is %d characters", n)
+	}
+}
+
+func TestNothingIsStoredWhileTheEmbedderIsDown(t *testing.T) {
+	st, e, repo := newStore(t)
+	e.fail.Store(true)
+	if _, err := st.Learn(context.Background(), "A note while the model server is down.", "p", "x", ""); err == nil || !strings.Contains(err.Error(), "nothing was stored") {
+		t.Fatalf("%v", err)
+	}
+	if n := countFiles(t, filepath.Join(repo, "notes")); n != 0 {
+		t.Fatalf("%d files written", n)
+	}
+	e.fail.Store(false)
+	if _, err := st.Learn(context.Background(), "A note while the model server is down.", "p", "x", ""); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+}
+
+func TestHundredConcurrentWritesLoseNothing(t *testing.T) {
+	st, _, repo := newStore(t)
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	errs := make(chan error, 100)
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, err := st.Learn(ctx, fmt.Sprintf("Concurrent learning number %d about the widget subsystem.", i), "conc", "load:test", "")
+			if err != nil {
+				errs <- err
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Errorf("write failed: %v", err)
+	}
+	// the cap archives the oldest, so count files, not active notes
+	if n := countFiles(t, filepath.Join(repo, "notes", "conc")); n != 100 {
+		t.Fatalf("%d of 100 notes on disk", n)
+	}
+	var nodes int
+	st.DB.QueryRow(`SELECT count(*) FROM nodes WHERE kind='note' AND project='conc'`).Scan(&nodes)
+	if nodes != 100 {
+		t.Fatalf("%d of 100 notes in the index", nodes)
+	}
+	st.Commit.Flush()
+	out, _ := exec.Command("git", "-C", repo, "status", "--porcelain").CombinedOutput()
+	if strings.TrimSpace(string(out)) != "" {
+		t.Fatalf("uncommitted files remain (committer error: %v, commits %d, pending %d):\n%.200s", st.Commit.LastErr, st.Commit.Commits, st.Commit.pending, out)
+	}
+	log, _ := exec.Command("git", "-C", repo, "rev-list", "--count", "HEAD").CombinedOutput()
+	t.Logf("100 notes written concurrently, 0 errors, %s commit(s) (committer counted %d)", strings.TrimSpace(string(log)), st.Commit.Commits)
+	if st.Commit.Commits < 1 {
+		t.Fatal("no commit was made")
+	}
+}
+
+func TestStagingCapArchivesTheOldestAndKeepsTheFiles(t *testing.T) {
+	st, _, repo := newStore(t)
+	st.Cap = 5
+	ctx := context.Background()
+	var ids []string
+	for i := 0; i < 8; i++ {
+		id, err := st.Learn(ctx, fmt.Sprintf("Cap test note number %d with some distinct words %d.", i, i*7), "cap", "k", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, strings.Fields(id)[0])
+		time.Sleep(2 * time.Millisecond) // created timestamps must differ
+	}
+	rows, _ := st.DB.Query(`SELECT id, status FROM nodes WHERE project='cap' ORDER BY created_at`)
+	defer rows.Close()
+	var got []string
+	for rows.Next() {
+		var id, s string
+		rows.Scan(&id, &s)
+		got = append(got, s)
+	}
+	want := []string{"archived", "archived", "archived", "active", "active", "active", "active", "active"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("statuses %v", got)
+	}
+	if n := countFiles(t, filepath.Join(repo, "notes", "cap")); n != 8 {
+		t.Fatalf("an archived note must keep its file: %d files", n)
+	}
+	if hits, _ := st.DB.Keyword("Cap test note number 0", index.Filter{Kinds: []string{"note"}}); len(hits) != 0 && hits[0].NodeID == "notes/cap/"+ids[0] {
+		t.Fatal("an archived note was returned by recall")
+	}
+}
+
+func TestSupersedeRetireAndFeedback(t *testing.T) {
+	st, _, repo := newStore(t)
+	ctx := context.Background()
+	old, _ := st.Learn(ctx, "The service listens on port 8000 by default.", "s", "cfg:port", "")
+	res, err := st.Learn(ctx, "The service listens on port 8765 by default.", "s", "cfg:port", old[:8])
+	if err != nil || !strings.Contains(res, "replaced "+old[:8]) {
+		t.Fatalf("%q %v", res, err)
+	}
+	raw, _ := os.ReadFile(filepath.Join(repo, "notes", "s", old+".md"))
+	if !strings.Contains(string(raw), "status: superseded") || !strings.Contains(string(raw), "superseded_by:") {
+		t.Fatalf("old note not marked:\n%s", raw)
+	}
+	hasNode := func(hits []index.Hit, id string) bool {
+		for _, h := range hits {
+			if strings.HasSuffix(h.NodeID, id) {
+				return true
+			}
+		}
+		return false
+	}
+	if hits, _ := st.DB.Keyword("port 8000 listens", index.Filter{Kinds: []string{"note"}}); hasNode(hits, old) {
+		t.Fatalf("a superseded note is still returned: %+v", hits)
+	}
+	// unknown, too short and already non-live ids change nothing
+	for _, id := range []string{"zzzzzzzz", "ab", old[:8]} {
+		out, err := st.Retire(ctx, id, "x", "")
+		if err != nil || (!strings.Contains(out, "nothing changed")) {
+			t.Fatalf("Retire(%q) = %q, %v", id, out, err)
+		}
+	}
+	newID := strings.Fields(res)[0]
+	out, err := st.Retire(ctx, newID[:8], "wrong after all", "s")
+	if err != nil || !strings.HasPrefix(out, "retired "+newID[:8]) {
+		t.Fatalf("%q %v", out, err)
+	}
+	if hits, _ := st.DB.Keyword("port 8765 listens", index.Filter{Kinds: []string{"note"}}); hasNode(hits, newID) {
+		t.Fatalf("a retired note is still returned: %+v", hits)
+	}
+	// an ambiguous prefix changes nothing
+	a, _ := st.Learn(ctx, "Alpha note about caching layers and expiry times.", "amb", "k", "")
+	b, _ := st.Learn(ctx, "Beta note about caching layers and expiry times.", "amb", "k", "")
+	common := 0
+	for common < len(a) && common < len(b) && a[common] == b[common] {
+		common++
+	}
+	if common >= 4 { // only meaningful when the two ids share a prefix of 4 or more characters
+		out, _ := st.Retire(ctx, a[:common], "", "amb")
+		if !strings.Contains(out, "nothing changed") {
+			t.Fatalf("ambiguous prefix retired something: %q", out)
+		}
+	}
+	// feedback
+	f1, _ := st.Learn(ctx, "A note to be rated several times over.", "fb", "k", "")
+	st.Feedback(f1[:8], true, "fb")
+	msg, _ := st.Feedback(f1[:8], false, "fb")
+	if !strings.Contains(msg, "helpful 1, unhelpful 1") {
+		t.Fatalf("%q", msg)
+	}
+}
+
+func TestCommitterWaitsOutAMergeAndKeepsTheFiles(t *testing.T) {
+	st, _, repo := newStore(t)
+	os.WriteFile(filepath.Join(repo, ".git", "MERGE_HEAD"), []byte("0000000000000000000000000000000000000000\n"), 0o644)
+	if _, err := st.Learn(context.Background(), "A note written during a merge.", "m", "k", ""); err != nil {
+		t.Fatal(err)
+	}
+	st.Commit.Flush()
+	if st.Commit.Commits != 0 {
+		t.Fatal("committed in the middle of a merge")
+	}
+	if !st.Commit.Busy() {
+		t.Fatal("Busy must see MERGE_HEAD")
+	}
+	os.Remove(filepath.Join(repo, ".git", "MERGE_HEAD"))
+	st.Commit.Flush()
+	if st.Commit.Commits != 1 {
+		t.Fatalf("expected the pending note to be committed once the merge is over, commits=%d", st.Commit.Commits)
+	}
+}
+
+func TestWikiReadStaysInsideWiki(t *testing.T) {
+	st, _, repo := newStore(t)
+	os.MkdirAll(filepath.Join(repo, "wiki", "p"), 0o755)
+	os.WriteFile(filepath.Join(repo, "wiki", "p", "a.md"), []byte("# A\n"), 0o644)
+	os.WriteFile(filepath.Join(repo, "secret.md"), []byte("outside"), 0o644)
+	if got, err := st.WikiRead("p/a.md"); err != nil || got != "# A\n" {
+		t.Fatalf("%q %v", got, err)
+	}
+	if got, err := st.WikiRead("wiki/p/a.md"); err != nil || got != "# A\n" {
+		t.Fatalf("with the wiki/ prefix: %q %v", got, err)
+	}
+	for _, bad := range []string{"../secret.md", "p/../../secret.md", "/etc/passwd", "p/a.txt", "", "p/missing.md"} {
+		if got, err := st.WikiRead(bad); err == nil || strings.Contains(got, "outside") {
+			t.Fatalf("WikiRead(%q) = %q, %v", bad, got, err)
+		}
+	}
+	os.Symlink(filepath.Join(repo, "secret.md"), filepath.Join(repo, "wiki", "p", "link.md"))
+	if got, err := st.WikiRead("p/link.md"); err == nil || strings.Contains(got, "outside") {
+		t.Fatalf("a symlink out of wiki/ was followed: %q %v", got, err)
+	}
+}
+
+func TestCommitterNeverSweepsInTheOwnersStagedWork(t *testing.T) {
+	st, _, repo := newStore(t)
+	os.WriteFile(filepath.Join(repo, "README.md"), []byte("owner work\n"), 0o644)
+	exec.Command("git", "-C", repo, "add", "README.md").Run()
+	if _, err := st.Learn(context.Background(), "A note while the owner has something staged.", "o", "k", ""); err != nil {
+		t.Fatal(err)
+	}
+	st.Commit.Flush()
+	if st.Commit.Commits != 0 || st.Commit.LastErr == nil || !strings.Contains(st.Commit.LastErr.Error(), "README.md") {
+		t.Fatalf("commits %d, err %v", st.Commit.Commits, st.Commit.LastErr)
+	}
+	out, _ := exec.Command("git", "-C", repo, "diff", "--cached", "--name-only").CombinedOutput()
+	if !strings.Contains(string(out), "README.md") {
+		t.Fatal("the owner's staged file was disturbed")
+	}
+	exec.Command("git", "-C", repo, "reset", "-q", "README.md").Run()
+	os.Remove(filepath.Join(repo, "README.md"))
+	st.Commit.Flush()
+	if st.Commit.Commits != 1 {
+		t.Fatalf("after the owner's change is gone the note must be committed: %d, %v", st.Commit.Commits, st.Commit.LastErr)
+	}
+}
+
+func TestFirstWriteIntoAFreshRepositoryIsCommitted(t *testing.T) {
+	st, _, repo := newStore(t) // no facts/ content, no commits yet
+	if _, err := st.Learn(context.Background(), "The very first note of a new memory repository.", "fresh", "k", ""); err != nil {
+		t.Fatal(err)
+	}
+	st.Commit.Flush()
+	if st.Commit.Commits != 1 || st.Commit.LastErr != nil {
+		t.Fatalf("commits %d, err %v", st.Commit.Commits, st.Commit.LastErr)
+	}
+	out, _ := exec.Command("git", "-C", repo, "log", "--format=%s").CombinedOutput()
+	if !strings.Contains(string(out), "memory: ") {
+		t.Fatalf("log: %s", out)
+	}
+}

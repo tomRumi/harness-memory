@@ -7,7 +7,7 @@ import (
 )
 
 // hitsByID fetches the chunks with the given ids as hits, keeping only active ones.
-func (d *DB) hitsByID(ids []int64) (map[int64]Hit, error) {
+func (d *DB) hitsByID(ids []int64, activeOnly bool) (map[int64]Hit, error) {
 	out := map[int64]Hit{}
 	if len(ids) == 0 {
 		return out, nil
@@ -16,15 +16,18 @@ func (d *DB) hitsByID(ids []int64) (map[int64]Hit, error) {
 	for i, id := range ids {
 		args[i] = id
 	}
-	rows, err := d.Query(`SELECT c.id, n.id, n.kind, n.project, n.path, c.section, c.text FROM chunks c JOIN nodes n ON n.id=c.node_id
-		WHERE n.status='active' AND c.id IN (`+strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")+`)`, args...)
+	q := `SELECT c.id, n.id, n.kind, n.project, n.path, c.section, c.text, n.status FROM chunks c JOIN nodes n ON n.id=c.node_id WHERE c.id IN (` + strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",") + `)`
+	if activeOnly {
+		q += ` AND n.status='active'`
+	}
+	rows, err := d.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var h Hit
-		if err := rows.Scan(&h.ChunkID, &h.NodeID, &h.Kind, &h.Project, &h.Path, &h.Section, &h.Text); err != nil {
+		if err := rows.Scan(&h.ChunkID, &h.NodeID, &h.Kind, &h.Project, &h.Path, &h.Section, &h.Text, &h.Status); err != nil {
 			return nil, err
 		}
 		out[h.ChunkID] = h
@@ -92,7 +95,7 @@ func (d *DB) Hybrid(ctx context.Context, e Embedder, m *Matrix, query string, f 
 		}
 		ids = cut
 	}
-	byID, err := d.hitsByID(ids)
+	byID, err := d.hitsByID(ids, !f.AllStatuses)
 	if err != nil {
 		return nil, "", err
 	}

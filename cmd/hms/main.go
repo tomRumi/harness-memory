@@ -6,16 +6,22 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/tomRumi/harness-memory-service/internal/embed"
 	"github.com/tomRumi/harness-memory-service/internal/index"
+	"github.com/tomRumi/harness-memory-service/internal/server"
+	"github.com/tomRumi/harness-memory-service/internal/store"
 )
 
 const usage = `hms: markdown-backed memory with a rebuildable index
@@ -28,6 +34,7 @@ usage: hms [--home DIR] [--repo DIR] [--db FILE] <command> [arguments]
   recall [-p P] [-k K,K] [-n N] [-keyword] [-json] <words...>
                                hybrid recall (vectors + keywords) over active nodes; -keyword skips the vectors
   bench <questions.json> ...   recall latency over the questions' texts (query vector cached, then with embedding)
+  serve [-addr A] [-no-embed]  MCP over HTTP (loopback only) with seven tools: recall learn wiki_read fact_add retire feedback stats
   stats                        node counts by kind and project
   hash                         digest of everything derived from files
   digests                      one digest per node, as JSON
@@ -269,6 +276,55 @@ func main() {
 		fmt.Printf("vector matrix load (once per process): %s\n", loaded.Round(time.Millisecond))
 		fmt.Printf("recall without embedding (cached query vector): p50 %s  p95 %s  max %s\n", pct(warm, .5).Round(time.Microsecond), pct(warm, .95).Round(time.Microsecond), pct(warm, 1).Round(time.Microsecond))
 		fmt.Printf("recall with embedding of the query:             p50 %s  p95 %s  max %s\n", pct(cold, .5).Round(time.Millisecond), pct(cold, .95).Round(time.Millisecond), pct(cold, 1).Round(time.Millisecond))
+	case "serve":
+		fs := flag.NewFlagSet("serve", flag.ExitOnError)
+		addr := fs.String("addr", "127.0.0.1:8765", "listen address; must be a loopback address")
+		noEmbed := fs.Bool("no-embed", false, "run without an embedder (keyword match only; writes skip vectors)")
+		fs.Parse(rest)
+		host, _, err := net.SplitHostPort(*addr)
+		if err != nil {
+			die("serve: %v", err)
+		}
+		if ip := net.ParseIP(host); host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+			die("serve: %q is not a loopback address; the service has no authentication and listens on this machine only", *addr)
+		}
+		d := open(p)
+		defer d.Close()
+		var emb *embed.Client
+		if !*noEmbed {
+			emb = embed.New(embed.Default())
+			hc, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			if _, err := emb.Health(hc); err != nil {
+				fmt.Fprintf(os.Stderr, "hms: embedder not reachable (%v): starting with keyword match only; writes will be refused until it is back\n", err)
+			}
+			cancel()
+		}
+		com := store.NewCommitter(p.repo, 3*time.Second)
+		var e index.Embedder
+		if emb != nil {
+			e = emb
+		}
+		st, err := store.New(p.repo, d, e, com, filepath.Join(p.home, "events.db"))
+		if err != nil {
+			die("serve: %v", err)
+		}
+		defer st.Close()
+		srv, err := server.New(st, d, e)
+		if err != nil {
+			die("serve: %v", err)
+		}
+		hs := &http.Server{Addr: *addr, Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second}
+		go func() {
+			sig := make(chan os.Signal, 1)
+			signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+			<-sig
+			com.Flush()
+			hs.Shutdown(context.Background())
+		}()
+		fmt.Printf("hms serving MCP on http://%s/mcp (health: /healthz)\n", *addr)
+		if err := hs.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			die("serve: %v", err)
+		}
 	case "stats":
 		d := open(p)
 		defer d.Close()

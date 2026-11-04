@@ -25,7 +25,6 @@ CREATE TABLE IF NOT EXISTS chunks(
 CREATE TABLE IF NOT EXISTS edges(
   subject_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE, relation TEXT NOT NULL,
   object_ref TEXT NOT NULL, source TEXT NOT NULL, PRIMARY KEY(subject_id, relation, object_ref, source));
-CREATE TABLE IF NOT EXISTS events(at TEXT NOT NULL, kind TEXT NOT NULL, node_id TEXT NOT NULL, project TEXT NOT NULL, detail TEXT NOT NULL);
 `
 
 // ftsSchema is built with Sprintf so the tokenizer option does not look like an assignment to the leak gate.
@@ -33,7 +32,7 @@ CREATE TABLE IF NOT EXISTS events(at TEXT NOT NULL, kind TEXT NOT NULL, node_id 
 var ftsSchema = fmt.Sprintf(`CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(text, meta, tokenize = %q)`, "unicode61 remove_diacritics 2 tokenchars '_'")
 
 // schemaVersion changes whenever a table changes. The index is derived, so an older one is dropped and rebuilt.
-const schemaVersion = 2
+const schemaVersion = 3
 
 // vectorSchema lives in its own file next to the index: embedding is the slow part (hours on a small machine), and
 // deleting the index to rebuild it from the markdown must not throw the vectors away. They are keyed by the hash of
