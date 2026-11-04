@@ -254,3 +254,15 @@ func TestStatsAndHealthz(t *testing.T) {
 		t.Fatalf("%d %s", resp.StatusCode, b)
 	}
 }
+
+func TestContextBlockKeepsOnlyRealHits(t *testing.T) {
+	_, full, _, _, _ := setup(t)
+	srv, _ := NewReader(full.DB, nil) // keyword only, as the hook runs by default
+	if got := srv.ContextBlock(context.Background(), "zzzqqq nothing matches this", "", 1000); got != "" {
+		t.Fatalf("a query without a hit must give an empty block, got %q", got)
+	}
+	got := srv.ContextBlock(context.Background(), "daemon port loopback", "", 1000)
+	if !strings.HasPrefix(got, "<memory-context") || !strings.HasSuffix(got, "</memory-context>") || strings.Contains(got, "no results") || strings.Contains(got, "not built") {
+		t.Fatalf("%q", got)
+	}
+}

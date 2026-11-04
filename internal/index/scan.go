@@ -502,8 +502,8 @@ func insert(tx *sql.Tx, p parsed) error {
 	if n.Pinned {
 		pin = 1
 	}
-	if _, err := tx.Exec(`INSERT INTO nodes(id,kind,project,path,title,status,retired_reason,superseded_by,pinned,note_kind,created_at,updated_at,content_hash)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, n.ID, n.Kind, n.Project, n.Path, n.Title, n.Status, n.RetiredReason, n.SupersededBy, pin,
+	if _, err := tx.Exec(`INSERT INTO nodes(id,kind,project,path,stem,title,status,retired_reason,superseded_by,pinned,note_kind,created_at,updated_at,content_hash)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, n.ID, n.Kind, n.Project, n.Path, strings.TrimSuffix(filepath.Base(n.Path), ".md"), n.Title, n.Status, n.RetiredReason, n.SupersededBy, pin,
 		n.NoteKind, n.Created, n.Updated, n.Hash); err != nil {
 		return err
 	}

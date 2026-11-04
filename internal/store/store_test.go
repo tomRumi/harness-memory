@@ -198,11 +198,11 @@ func TestHundredConcurrentWritesLoseNothing(t *testing.T) {
 	st.Commit.Flush()
 	out, _ := exec.Command("git", "-C", repo, "status", "--porcelain").CombinedOutput()
 	if strings.TrimSpace(string(out)) != "" {
-		t.Fatalf("uncommitted files remain (committer error: %v, commits %d, pending %d):\n%.200s", st.Commit.LastErr, st.Commit.Commits, st.Commit.pending, out)
+		t.Fatalf("uncommitted files remain (committer error: %v, commits %d):\n%.200s", st.Commit.LastErr(), st.Commit.Commits(), out)
 	}
 	log, _ := exec.Command("git", "-C", repo, "rev-list", "--count", "HEAD").CombinedOutput()
-	t.Logf("100 notes written concurrently, 0 errors, %s commit(s) (committer counted %d)", strings.TrimSpace(string(log)), st.Commit.Commits)
-	if st.Commit.Commits < 1 {
+	t.Logf("100 notes written concurrently, 0 errors, %s commit(s) (committer counted %d)", strings.TrimSpace(string(log)), st.Commit.Commits())
+	if st.Commit.Commits() < 1 {
 		t.Fatal("no commit was made")
 	}
 }
@@ -307,7 +307,7 @@ func TestCommitterWaitsOutAMergeAndKeepsTheFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	st.Commit.Flush()
-	if st.Commit.Commits != 0 {
+	if st.Commit.Commits() != 0 {
 		t.Fatal("committed in the middle of a merge")
 	}
 	if !st.Commit.Busy() {
@@ -315,8 +315,8 @@ func TestCommitterWaitsOutAMergeAndKeepsTheFiles(t *testing.T) {
 	}
 	os.Remove(filepath.Join(repo, ".git", "MERGE_HEAD"))
 	st.Commit.Flush()
-	if st.Commit.Commits != 1 {
-		t.Fatalf("expected the pending note to be committed once the merge is over, commits=%d", st.Commit.Commits)
+	if st.Commit.Commits() != 1 {
+		t.Fatalf("expected the pending note to be committed once the merge is over, commits=%d", st.Commit.Commits())
 	}
 }
 
@@ -350,8 +350,8 @@ func TestCommitterNeverSweepsInTheOwnersStagedWork(t *testing.T) {
 		t.Fatal(err)
 	}
 	st.Commit.Flush()
-	if st.Commit.Commits != 0 || st.Commit.LastErr == nil || !strings.Contains(st.Commit.LastErr.Error(), "README.md") {
-		t.Fatalf("commits %d, err %v", st.Commit.Commits, st.Commit.LastErr)
+	if st.Commit.Commits() != 0 || st.Commit.LastErr() == nil || !strings.Contains(st.Commit.LastErr().Error(), "README.md") {
+		t.Fatalf("commits %d, err %v", st.Commit.Commits(), st.Commit.LastErr())
 	}
 	out, _ := exec.Command("git", "-C", repo, "diff", "--cached", "--name-only").CombinedOutput()
 	if !strings.Contains(string(out), "README.md") {
@@ -360,8 +360,8 @@ func TestCommitterNeverSweepsInTheOwnersStagedWork(t *testing.T) {
 	exec.Command("git", "-C", repo, "rm", "--cached", "-q", "-f", "README.md").Run() // works before the first commit, unlike reset
 	os.Remove(filepath.Join(repo, "README.md"))
 	st.Commit.Flush()
-	if st.Commit.Commits != 1 {
-		t.Fatalf("after the owner's change is gone the note must be committed: %d, %v", st.Commit.Commits, st.Commit.LastErr)
+	if st.Commit.Commits() != 1 {
+		t.Fatalf("after the owner's change is gone the note must be committed: %d, %v", st.Commit.Commits(), st.Commit.LastErr())
 	}
 }
 
@@ -371,11 +371,125 @@ func TestFirstWriteIntoAFreshRepositoryIsCommitted(t *testing.T) {
 		t.Fatal(err)
 	}
 	st.Commit.Flush()
-	if st.Commit.Commits != 1 || st.Commit.LastErr != nil {
-		t.Fatalf("commits %d, err %v", st.Commit.Commits, st.Commit.LastErr)
+	if st.Commit.Commits() != 1 || st.Commit.LastErr() != nil {
+		t.Fatalf("commits %d, err %v", st.Commit.Commits(), st.Commit.LastErr())
 	}
 	out, _ := exec.Command("git", "-C", repo, "log", "--format=%s").CombinedOutput()
 	if !strings.Contains(string(out), "memory: ") {
 		t.Fatalf("log: %s", out)
+	}
+}
+
+func TestSupersedeAtTheCapDoesNotArchiveForNothing(t *testing.T) {
+	st, _, _ := newStore(t)
+	st.Cap = 3
+	ctx := context.Background()
+	var ids []string
+	for i := 0; i < 3; i++ {
+		id, err := st.Learn(ctx, fmt.Sprintf("Distinct note number %d about the nightly job and its schedule.", i), "cap", "k", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	// the project is at the cap; replacing one note must not archive another
+	msg, err := st.Learn(ctx, "A replacement for the first note about the nightly job and its schedule.", "cap", "k", ids[0][:8])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(msg, "archived") {
+		t.Fatalf("a replacement at the cap archived a note: %s", msg)
+	}
+	var active int
+	st.DB.QueryRow(`SELECT count(*) FROM nodes WHERE kind='note' AND project='cap' AND status='active'`).Scan(&active)
+	if active != 3 {
+		t.Fatalf("active %d, want 3", active)
+	}
+}
+
+func TestSupersedesIsTrimmedAndNeedsEnoughOfTheId(t *testing.T) {
+	st, _, _ := newStore(t)
+	ctx := context.Background()
+	id, _ := st.Learn(ctx, "The first note about the cache size being 64 megabytes.", "s", "k", "")
+	for _, bad := range []string{" ", "9", id[:3]} {
+		msg, err := st.Learn(ctx, "Another note "+bad+" about something else entirely, long enough.", "s", "k", bad)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(msg, "|| replaced ") {
+			t.Fatalf("supersedes %q replaced a note: %s", bad, msg)
+		}
+	}
+	var active int
+	st.DB.QueryRow(`SELECT count(*) FROM nodes WHERE kind='note' AND project='s' AND status='active'`).Scan(&active)
+	if active != 4 {
+		t.Fatalf("active %d, want 4 (nothing replaced)", active)
+	}
+	msg, _ := st.Learn(ctx, "The real replacement: the cache size is 128 megabytes.", "s", "k", " "+id[:8]+" ")
+	if !strings.Contains(msg, "|| replaced ") {
+		t.Fatalf("a padded but valid id must work: %s", msg)
+	}
+}
+
+func TestImportedFactsCanBeRetiredByTheirShortId(t *testing.T) {
+	st, _, repo := newStore(t)
+	os.MkdirAll(filepath.Join(repo, "facts", "global"), 0o755)
+	os.WriteFile(filepath.Join(repo, "facts", "global", "00004.md"), []byte("---\nid: 00004\nstatus: active\n---\nThe imported fact about a thing worth keeping.\n"), 0o644)
+	if _, err := st.DB.Rescan(repo); err != nil {
+		t.Fatal(err)
+	}
+	msg, err := st.Retire(context.Background(), "00004", "wrong now", "")
+	if err != nil || !strings.Contains(strings.ToLower(msg), "retired") {
+		t.Fatalf("%q %v", msg, err)
+	}
+	raw, _ := os.ReadFile(filepath.Join(repo, "facts", "global", "00004.md"))
+	if !strings.Contains(string(raw), "id: 00004") || !strings.Contains(string(raw), "status: retired") {
+		t.Fatalf("frontmatter after retire:\n%s", raw)
+	}
+}
+
+func TestCrashLeftoversAreNeverCommittedAndFreshRepoWithoutFactsWorks(t *testing.T) {
+	st, _, repo := newStore(t)
+	os.MkdirAll(filepath.Join(repo, "notes", "p"), 0o755)
+	os.WriteFile(filepath.Join(repo, "notes", "p", ".tmp-123456"), []byte("half a note"), 0o644)
+	if _, err := st.Learn(context.Background(), "A real note that must be committed without the leftover.", "p", "k", ""); err != nil {
+		t.Fatal(err)
+	}
+	st.Commit.Flush()
+	if st.Commit.Commits() != 1 || st.Commit.LastErr() != nil {
+		t.Fatalf("commits %d err %v", st.Commit.Commits(), st.Commit.LastErr())
+	}
+	out, _ := exec.Command("git", "-C", repo, "ls-files").CombinedOutput()
+	if strings.Contains(string(out), ".tmp-") {
+		t.Fatalf("a temporary file was committed:\n%s", out)
+	}
+}
+
+func TestCommitterRetriesAfterAFailure(t *testing.T) {
+	st, _, repo := newStore(t)
+	st.Commit = NewCommitter(repo, 20*time.Millisecond)
+	os.WriteFile(filepath.Join(repo, "owner.txt"), []byte("x"), 0o644)
+	exec.Command("git", "-C", repo, "add", "owner.txt").Run()
+	if _, err := st.Learn(context.Background(), "A note saved while the owner has a file staged in the repository.", "r", "k", ""); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(150 * time.Millisecond)
+	if st.Commit.LastErr() == nil || st.Commit.Commits() != 0 {
+		t.Fatalf("expected a refusal first: %d %v", st.Commit.Commits(), st.Commit.LastErr())
+	}
+	exec.Command("git", "-C", repo, "rm", "--cached", "-q", "-f", "owner.txt").Run()
+	deadline := time.Now().Add(5 * time.Second)
+	for st.Commit.Commits() == 0 && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if st.Commit.Commits() != 1 {
+		t.Fatalf("no retry after the owner unstaged: %d, %v", st.Commit.Commits(), st.Commit.LastErr())
+	}
+}
+
+func TestNoGitDirectoryIsReportedNotOk(t *testing.T) {
+	c := NewCommitter(t.TempDir(), time.Millisecond)
+	if _, _, _, enabled := c.Status(); enabled {
+		t.Fatal("a directory without .git must report commits as off")
 	}
 }

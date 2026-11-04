@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -33,6 +34,12 @@ type Server struct {
 
 	mu  sync.RWMutex
 	mat *index.Matrix
+}
+
+// NewReader makes a server that can only answer recall: no store, no writes. The command-line context format uses it.
+func NewReader(db *index.DB, emb index.Embedder) (*Server, error) {
+	s := &Server{DB: db, Emb: emb}
+	return s, s.Reload()
 }
 
 func New(st *store.Store, db *index.DB, emb index.Embedder) (*Server, error) {
@@ -160,7 +167,11 @@ func (s *Server) Recall(ctx context.Context, in RecallIn) string {
 			return
 		}
 		f := index.Filter{Project: project, Kinds: kinds, Limit: quota, AllStatuses: in.IncludeArchived}
-		hits, _, warn := s.DB.Hybrid(ctx, s.Emb, s.matrix(), q, f)
+		hits, via, warn := s.DB.Hybrid(ctx, s.Emb, s.matrix(), q, f)
+		if via == "" && warn != nil { // the keyword search itself failed
+			lines = append(lines, fmt.Sprintf("[%s%s unavailable: %v]", prefix, tag, warn))
+			return
+		}
 		if warn != nil {
 			lines = append(lines, fmt.Sprintf("[%s%s: vectors unavailable (%v); keyword match only]", prefix, tag, warn))
 		}
@@ -188,7 +199,9 @@ func (s *Server) Recall(ctx context.Context, in RecallIn) string {
 	if in.Budget > 0 && len([]rune(out)) > in.Budget {
 		out = string([]rune(out)[:in.Budget]) + "…"
 	}
-	s.St.Event("recall", "", proj, clip(q, 100))
+	if s.St != nil {
+		s.St.Event("recall", "", proj, clip(q, 100))
+	}
 	return out
 }
 
@@ -239,13 +252,16 @@ func (s *Server) Stats(ctx context.Context, in StatsIn) string {
 		}
 	}
 	if c := s.St.Commit; c != nil {
+		commits, lastErr, _, enabled := c.Status()
 		switch {
-		case c.LastErr != nil:
-			fmt.Fprintf(&b, "commits: last commit failed: %v\n", c.LastErr)
+		case !enabled:
+			b.WriteString("commits: off, the memory directory is not a git repository (notes are saved as files only)\n")
+		case lastErr != nil:
+			fmt.Fprintf(&b, "commits: last commit failed (retrying): %v\n", lastErr)
 		case c.Busy():
 			b.WriteString("commits: paused, the repository is in the middle of a merge or rebase\n")
 		default:
-			fmt.Fprintf(&b, "commits: ok (%d made since start)\n", c.Commits)
+			fmt.Fprintf(&b, "commits: ok (%d made since start)\n", commits)
 		}
 	}
 	return strings.TrimRight(b.String(), "\n")
@@ -351,10 +367,27 @@ func (s *Server) Handler() http.Handler {
 		return m
 	}
 	mux := http.NewServeMux()
-	mux.Handle("/mcp", mcp.NewStreamableHTTPHandler(build, nil))
+	mux.Handle("/mcp", mcp.NewStreamableHTTPHandler(build, &mcp.StreamableHTTPOptions{SessionTimeout: 30 * time.Minute}))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		fmt.Fprintln(w, s.Stats(r.Context(), StatsIn{}))
 	})
 	return mux
+}
+
+var noiseLine = regexp.MustCompile(`^\[(global )?(wiki|code|memory|fact)(:| unavailable)`)
+
+// ContextBlock is the text a harness hook adds in front of a prompt: only real hits, no empty-state lines (a prompt
+// that finds nothing adds nothing). It is empty when there is nothing to add.
+func (s *Server) ContextBlock(ctx context.Context, query, project string, budget int) string {
+	var keep []string
+	for _, l := range strings.Split(s.Recall(ctx, RecallIn{Query: query, Project: project, Budget: budget}), "\n") {
+		if strings.TrimSpace(l) != "" && !noiseLine.MatchString(l) {
+			keep = append(keep, l)
+		}
+	}
+	if len(keep) == 0 {
+		return ""
+	}
+	return "<memory-context source=\"harness-memory-service\" note=\"recalled automatically from earlier work; check it before relying on it\">\n" + strings.Join(keep, "\n") + "\n</memory-context>"
 }

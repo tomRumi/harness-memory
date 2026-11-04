@@ -64,7 +64,7 @@ func (d *DB) Upsert(repo, rel string) error {
 // NodesByPrefix returns the ids of active-or-not note and fact nodes whose file name starts with prefix, for
 // resolving the short id that recall prints.
 func (d *DB) NodesByPrefix(prefix, project string) ([]string, error) {
-	q := `SELECT id FROM nodes WHERE kind IN ('note','fact') AND substr(id, length(id) - 35) LIKE ? ESCAPE '\'`
+	q := `SELECT id FROM nodes WHERE kind IN ('note','fact') AND stem LIKE ? ESCAPE '\'`
 	args := []any{strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(prefix) + "%"}
 	if project != "" {
 		q += ` AND project = ?`

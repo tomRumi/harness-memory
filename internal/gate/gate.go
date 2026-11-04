@@ -35,11 +35,13 @@ var (
 	reVersion  = regexp.MustCompile(`\bv?\d+(?:\.\d+){1,}(?:-[A-Za-z0-9.]+)?\b`)
 	reUnit     = regexp.MustCompile(`\b\d[\d,]*(?:\.\d+)?\s?(?:%|ms|s|sec|min|h|d|GB|MB|KB|TB|GiB|MiB|KiB|x|px|rem|k|M|B)\b`)
 	rePort     = regexp.MustCompile(`(?i)\bport\s+\d{2,5}\b|:\d{2,5}\b`)
-	reHost     = regexp.MustCompile(`\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|net|org|io|hu|dev|app|ai|eu|local|sh|co|ch|de)\b`)
+	reHost     = regexp.MustCompile(`(?i)\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,24}\b`)
 	reIdent    = regexp.MustCompile(`\b[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]+\b|\b[a-z]+[A-Z][A-Za-z0-9]*\b`)
 	reBacktick = regexp.MustCompile("`([^`\n]{2,80})`")
 	reQuoted   = regexp.MustCompile(`"([^"\n]{3,80})"`)
-	reNumber   = regexp.MustCompile(`\b\d{3,}\b`)
+	reDate     = regexp.MustCompile(`\b\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2})?)?\b`)
+	reNumber   = regexp.MustCompile(`\b\d+(?:[.,]\d+)*\b`) // every number, counts included ("10 notes", "3 attempts")
+	reListMark = regexp.MustCompile(`(?m)^\s*\d+[.)]\s`)   // "1. " at the start of a line numbers a list; it is not a value
 	reCite     = regexp.MustCompile(`\[\[[^\]]*\]\]`)
 )
 
@@ -48,6 +50,44 @@ func body(s string) string { return reCite.ReplaceAllString(s, "") }
 
 // flat collapses every run of white space to one space, so a rewrapped line still contains the same value.
 func flat(s string) string { return strings.TrimSpace(spaces.ReplaceAllString(s, " ")) }
+
+// has reports whether v occurs in text as a whole value: not inside a longer number, name, address or path. "port 80"
+// is not found in "port 8080", and an address is not found inside a longer address that starts with it. Both sides are compared with white space
+// collapsed, so a value that was rewrapped over a line break is still found.
+func has(text, v string) bool {
+	text, v = flat(text), flat(v)
+	if v == "" {
+		return true
+	}
+	isWord := func(r byte) bool {
+		return r == '_' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= 0x80
+	}
+	for from := 0; from <= len(text)-len(v); {
+		i := strings.Index(text[from:], v)
+		if i < 0 {
+			return false
+		}
+		i += from
+		end := i + len(v)
+		okBefore := i == 0 || !(isWord(text[i-1]) && isWord(v[0]))
+		if i > 0 && text[i-1] == '.' && i > 1 && isWord(text[i-2]) && isWord(v[0]) {
+			okBefore = false // 1.8765 is not 8765
+		}
+		okAfter := end == len(text) || !(isWord(text[end]) && isWord(v[len(v)-1]))
+		lastWord := isWord(v[len(v)-1])
+		if okAfter && lastWord && end+1 < len(text) && text[end] == '.' && text[end+1] >= '0' && text[end+1] <= '9' {
+			okAfter = false // an address followed by a dot and a digit is a longer value
+		}
+		if okAfter && lastWord && end+1 < len(text) && text[end] == '-' && isWord(text[end+1]) {
+			okAfter = false // a hyphen joins words: port-80x is not port 80
+		}
+		if okBefore && okAfter {
+			return true
+		}
+		from = i + 1
+	}
+	return false
+}
 
 func norm(s string) string {
 	return strings.TrimSpace(spaces.ReplaceAllString(strings.ToLower(s), " "))
@@ -66,7 +106,8 @@ func HardValues(text string) []string {
 		out = append(out, v)
 	}
 	text = strings.ReplaceAll(text, "[[", " ")
-	for _, re := range []*regexp.Regexp{reURL, reIP, rePort, reVersion, reUnit, reHost, reIdent, rePath, reNumber} {
+	text = reListMark.ReplaceAllString(text, "")
+	for _, re := range []*regexp.Regexp{reURL, reDate, reIP, rePort, reVersion, reUnit, reHost, reIdent, rePath, reNumber} {
 		for _, m := range re.FindAllString(text, -1) {
 			add(m)
 		}
@@ -123,7 +164,7 @@ func CheckAppend(notes []Note, section string) (ok bool, problems []string) {
 		}
 		cl := flat(strings.Join(cited, "\n"))
 		for _, v := range HardValues(n.Text) {
-			if !strings.Contains(cl, flat(v)) {
+			if !has(cl, v) {
 				problems = append(problems, fmt.Sprintf("note %s: value %q is missing from the item that cites it", short(n.ID), v))
 			}
 		}
@@ -152,7 +193,7 @@ func CheckReplace(original, replacement string) (ok bool, problems []string) {
 		problems = append(problems, fmt.Sprintf("fence count %d->%d (changed or odd)", fo, fn))
 	}
 	for _, v := range HardValues(original) {
-		if !strings.Contains(replacement, v) {
+		if !has(replacement, v) {
 			problems = append(problems, fmt.Sprintf("value %q is missing from the new text", v))
 		}
 	}

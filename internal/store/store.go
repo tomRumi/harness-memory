@@ -88,7 +88,7 @@ func (s *Store) health(ctx context.Context) error {
 	if s.Emb == nil {
 		return nil
 	}
-	hc, cancel := context.WithTimeout(ctx, 60*time.Second)
+	hc, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if _, err := s.Emb.Query(hc, "healthcheck"); err != nil {
 		return fmt.Errorf("embedder unavailable (%v): nothing was stored", err)
@@ -115,23 +115,30 @@ func writeFile(path string, data []byte) error {
 		os.Remove(name)
 		return err
 	}
+	if err := os.Chmod(name, 0o644); err != nil {
+		os.Remove(name)
+		return err
+	}
 	return os.Rename(name, path)
 }
 
-// afterWrite updates the index for the changed files, embeds what is new, and tells the committer.
+// afterWrite updates the index for the changed files and tells the committer; then it embeds what is new. The commit is
+// scheduled before the embedding is tried, so a model server that is down cannot keep a saved note out of git.
 func (s *Store) afterWrite(ctx context.Context, rels ...string) error {
 	for _, r := range rels {
 		if err := s.DB.Upsert(s.Repo, r); err != nil {
 			return err
 		}
 	}
+	if s.Commit != nil {
+		s.Commit.Notify(rels...)
+	}
 	if s.Emb != nil {
-		if _, err := s.DB.EmbedPending(ctx, s.Emb, nil); err != nil {
+		ectx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		if _, err := s.DB.EmbedPending(ectx, s.Emb, nil); err != nil {
 			return fmt.Errorf("saved, but embedding failed (run `hms embed`): %w", err)
 		}
-	}
-	if s.Commit != nil {
-		s.Commit.Notify(len(rels))
 	}
 	if s.OnWrite != nil {
 		s.OnWrite()
@@ -139,22 +146,25 @@ func (s *Store) afterWrite(ctx context.Context, rels ...string) error {
 	return nil
 }
 
-// setFrontmatter changes keys of a file's frontmatter and keeps the body.
+// setFrontmatter changes keys of a file's frontmatter and leaves every other byte of the file as it was.
 func (s *Store) setFrontmatter(rel string, set map[string]any) error {
 	path := filepath.Join(s.Repo, rel)
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
-	doc := md.Parse(raw)
-	fm := doc.FM
-	if fm == nil {
-		fm = map[string]any{}
+	out, err := md.SetKeys(raw, set)
+	if err != nil {
+		return fmt.Errorf("%s: %w", rel, err)
 	}
-	for k, v := range set {
-		fm[k] = v
+	mode := os.FileMode(0o644)
+	if fi, err := os.Stat(path); err == nil {
+		mode = fi.Mode().Perm()
 	}
-	return writeFile(path, md.Render(fm, doc.Body))
+	if err := writeFile(path, out); err != nil {
+		return err
+	}
+	return os.Chmod(path, mode)
 }
 
 // Learn deposits one note and returns its id plus a short remark for the caller. It is idempotent: the same text
@@ -192,27 +202,37 @@ func (s *Store) Learn(ctx context.Context, text, proj, kind, supersedes string) 
 	}
 	changed := []string{rel}
 	note := ""
-	if supersedes != "" {
-		ids, err := s.DB.NodesByPrefix(strings.TrimSpace(supersedes), proj)
-		if err != nil {
-			return id, err
-		}
-		var notes []string
-		for _, n := range ids {
-			if strings.HasPrefix(n, "notes/") && n != strings.TrimSuffix(rel, ".md") {
-				notes = append(notes, n)
-			}
-		}
-		if len(notes) != 1 {
-			note = fmt.Sprintf(" || supersedes=%q matched no single note — nothing was marked as replaced", supersedes)
+	if supersedes = strings.TrimSpace(supersedes); supersedes != "" {
+		if len(supersedes) < 4 {
+			note = fmt.Sprintf(" || supersedes=%q is too short (give at least 4 characters of the id) — nothing was marked as replaced", supersedes)
 		} else {
-			trel := notes[0] + ".md"
-			if err := s.setFrontmatter(trel, map[string]any{"status": "superseded", "superseded_by": id}); err != nil {
+			ids, err := s.DB.NodesByPrefix(supersedes, proj)
+			if err != nil {
 				return id, err
 			}
-			changed = append(changed, trel)
-			s.Event("supersede", notes[0], proj, "->"+id)
-			note = " || replaced " + shortID(notes[0])
+			var notes []string
+			for _, n := range ids {
+				if strings.HasPrefix(n, "notes/") && n != strings.TrimSuffix(rel, ".md") {
+					notes = append(notes, n)
+				}
+			}
+			if len(notes) != 1 {
+				note = fmt.Sprintf(" || supersedes=%q matched no single note — nothing was marked as replaced", supersedes)
+			} else {
+				trel := notes[0] + ".md"
+				if err := s.setFrontmatter(trel, map[string]any{"status": "superseded", "superseded_by": id}); err != nil {
+					return id, err
+				}
+				changed = append(changed, trel)
+				s.Event("supersede", notes[0], proj, "->"+id)
+				note = " || replaced " + shortID(notes[0])
+			}
+		}
+	}
+	// the index must show the new note and the superseded one before the cap is counted
+	for _, r := range changed {
+		if err := s.DB.Upsert(s.Repo, r); err != nil {
+			return id + note, err
 		}
 	}
 	archived, err := s.enforceCap(proj)
@@ -256,8 +276,7 @@ func (s *Store) enforceCap(proj string) ([]string, error) {
 		live = append(live, x)
 	}
 	rows.Close()
-	// the note just written is not in the index yet
-	if len(live)+1 <= s.Cap {
+	if len(live) <= s.Cap {
 		return nil, nil
 	}
 	sort.Slice(live, func(i, j int) bool {
@@ -266,7 +285,7 @@ func (s *Store) enforceCap(proj string) ([]string, error) {
 		}
 		return live[i].id < live[j].id
 	})
-	over := len(live) + 1 - s.Cap
+	over := len(live) - s.Cap
 	var changed []string
 	for _, x := range live[:over] {
 		rel := x.id + ".md"

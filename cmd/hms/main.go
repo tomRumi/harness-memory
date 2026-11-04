@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -115,7 +116,12 @@ func main() {
 		n := fs.Int("n", 5, "number of hits")
 		asJSON := fs.Bool("json", false, "print hits as JSON, with the full text")
 		withVec := fs.Bool("vectors", os.Getenv("HMS_VECTORS") == "1", "add the vector pass (needs `hms embed` and a running model server); also HMS_VECTORS=1")
+		format := fs.String("format", "text", "text, or context for a harness hook (see -hook)")
+		hook := fs.Bool("hook", false, "with -format=context: read a UserPromptSubmit payload (JSON with prompt and cwd) on standard input")
 		fs.Parse(rest)
+		if *format == "context" {
+			os.Exit(recallContext(p, *proj, *hook, strings.Join(fs.Args(), " "), *withVec))
+		}
 		d := open(p)
 		defer d.Close()
 		f := index.Filter{Project: *proj, Limit: *n}
@@ -314,6 +320,8 @@ func main() {
 			cancel()
 		}
 		com := store.NewCommitter(p.repo, 3*time.Second)
+		store.CleanTemp(p.repo)
+		com.Sweep() // notes left uncommitted by a crash or an earlier failure
 		var e index.Embedder
 		if emb != nil {
 			e = emb
@@ -332,8 +340,10 @@ func main() {
 			sig := make(chan os.Signal, 1)
 			signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 			<-sig
+			sctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			hs.Shutdown(sctx) // in-flight writes finish first
+			cancel()
 			com.Flush()
-			hs.Shutdown(context.Background())
 		}()
 		fmt.Printf("hms serving MCP on http://%s/mcp (health: /healthz)\n", *addr)
 		if err := hs.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -434,4 +444,89 @@ func (c *cachedEmbedder) Query(ctx context.Context, t string) ([]float32, error)
 		c.vecs[t] = v
 	}
 	return v, err
+}
+
+// ContextTimeout bounds the whole hook run. After it the hook prints nothing and the prompt goes on unchanged.
+const ContextTimeout = 3 * time.Second
+
+// recallContext prints the memory block for a hook. It always returns 0: a hook must never block or fail a prompt.
+// Problems go to standard error.
+func recallContext(p paths, proj string, hook bool, query string, vectors bool) int {
+	if hook {
+		var in struct {
+			Prompt string `json:"prompt"`
+			Cwd    string `json:"cwd"`
+		}
+		if err := json.NewDecoder(io.LimitReader(os.Stdin, 4<<20)).Decode(&in); err != nil {
+			fmt.Fprintln(os.Stderr, "hms: hook payload not read:", err)
+			return 0
+		}
+		query = in.Prompt
+		if proj == "" {
+			proj = projectOfDir(p.repo, in.Cwd)
+		}
+	}
+	if r := []rune(strings.TrimSpace(query)); len(r) > 400 {
+		query = string(r[:400])
+	}
+	if strings.TrimSpace(query) == "" {
+		return 0
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), ContextTimeout)
+	defer cancel()
+	done := make(chan string, 1)
+	go func() {
+		d, err := index.Open(p.db)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "hms: memory unavailable:", err)
+			done <- ""
+			return
+		}
+		defer d.Close()
+		var e index.Embedder
+		if vectors {
+			e = embed.New(embed.Default())
+		}
+		srv, err := server.NewReader(d, e)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "hms: memory unavailable:", err)
+			done <- ""
+			return
+		}
+		done <- srv.ContextBlock(ctx, query, proj, 2500)
+	}()
+	select {
+	case out := <-done:
+		if out != "" {
+			fmt.Println(out)
+		}
+	case <-ctx.Done():
+		fmt.Fprintln(os.Stderr, "hms: recall took longer than", ContextTimeout, "- skipped")
+	}
+	return 0
+}
+
+// projectOfDir names the project whose code root contains dir, or "" when none does.
+func projectOfDir(repo, dir string) string {
+	if dir == "" {
+		return ""
+	}
+	if r, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = r
+	}
+	projects, err := index.LoadProjects(repo)
+	if err != nil {
+		return ""
+	}
+	for _, pr := range projects {
+		for _, root := range pr.CodeRoots {
+			if r, err := filepath.EvalSymlinks(root); err == nil {
+				root = r
+			}
+			if dir == root || strings.HasPrefix(dir, root+string(filepath.Separator)) {
+				return pr.Name
+			}
+		}
+	}
+	return ""
 }
