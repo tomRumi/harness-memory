@@ -37,14 +37,6 @@ func (d *DB) hitsByID(ids []int64) (map[int64]Hit, error) {
 // m may be nil or empty (no vectors yet): the result is then the keyword pass alone. A failing embedder also falls back
 // to the keyword pass; the error is returned beside the hits so the caller can say so.
 func (d *DB) Hybrid(ctx context.Context, e Embedder, m *Matrix, query string, f Filter) (hits []Hit, via string, warn error) {
-	return d.HybridOpts(ctx, e, m, query, f, false)
-}
-
-// HybridOpts is Hybrid with the one-hop pass optional. With oneHop, up to HopSlots of the final places go to the best
-// chunk of each entry that one of the top HopSeeds hits links to (ranked by similarity to the query), when that entry is
-// not already in the result. At least 3 direct hits always remain, so the pass applies when the limit is 5 or more. The pass needs
-// vectors: without them it does nothing.
-func (d *DB) HybridOpts(ctx context.Context, e Embedder, m *Matrix, query string, f Filter, oneHop bool) (hits []Hit, via string, warn error) {
 	limit := f.Limit
 	if limit <= 0 {
 		limit = 5
@@ -56,15 +48,12 @@ func (d *DB) HybridOpts(ctx context.Context, e Embedder, m *Matrix, query string
 		return nil, "", err
 	}
 	var vecIDs []int64
-	var qvec []float32
 	if e != nil && m != nil && len(m.IDs) > 0 && strings.TrimSpace(query) != "" {
 		q, qerr := e.Query(ctx, query)
 		if qerr != nil {
 			warn = qerr
 		} else if vecIDs, qerr = m.TopK(q, Candidates, f); qerr != nil {
 			warn = qerr
-		} else {
-			qvec = q
 		}
 	}
 	score := map[int64]float64{}
@@ -161,118 +150,5 @@ func (d *DB) HybridOpts(ctx context.Context, e Embedder, m *Matrix, query string
 	if len(vecIDs) > 0 {
 		via = "hybrid"
 	}
-	if oneHop && qvec != nil && limit >= HopSlots+3 && len(hits) > 0 {
-		hits, err = d.addLinked(hits, m, qvec, f, limit)
-		if err != nil {
-			return nil, "", err
-		}
-		via += "+hop"
-	}
 	return hits, via, warn
-}
-
-// addLinked reserves up to HopSlots places at the end of hits for linked entries.
-func (d *DB) addLinked(hits []Hit, m *Matrix, q []float32, f Filter, limit int) ([]Hit, error) {
-	inResult := map[string]bool{}
-	for _, h := range hits {
-		inResult[h.NodeID] = true
-	}
-	type cand struct {
-		chunk int64
-		score float32
-	}
-	var cands []cand
-	seen := map[string]bool{}
-	for si, h := range hits {
-		if si >= HopSeeds {
-			break
-		}
-		rows, err := d.Query(`SELECT DISTINCT t.id FROM edges e JOIN nodes t ON t.status='active' AND (t.id = e.object_ref OR (t.project = ? AND t.id LIKE '%/' || e.object_ref))
-			WHERE e.subject_id = ? AND e.relation = 'links_to' ORDER BY t.id LIMIT ?`, h.Project, h.NodeID, HopLinks)
-		if err != nil {
-			return nil, err
-		}
-		var linked []string
-		for rows.Next() {
-			var id string
-			if err := rows.Scan(&id); err != nil {
-				rows.Close()
-				return nil, err
-			}
-			linked = append(linked, id)
-		}
-		rows.Close()
-		for _, id := range linked {
-			if inResult[id] || seen[id] {
-				continue
-			}
-			seen[id] = true
-			crows, err := d.Query(`SELECT c.id FROM chunks c JOIN nodes n ON n.id = c.node_id WHERE c.node_id = ?`+kindClause(f)+` ORDER BY c.seq`, kindArgs(id, f)...)
-			if err != nil {
-				return nil, err
-			}
-			best := cand{chunk: -1, score: -2}
-			for crows.Next() {
-				var cid int64
-				if err := crows.Scan(&cid); err != nil {
-					crows.Close()
-					return nil, err
-				}
-				if sc, ok := m.Dot(q, cid); ok && sc > best.score {
-					best = cand{cid, sc}
-				}
-			}
-			crows.Close()
-			if best.chunk >= 0 {
-				cands = append(cands, best)
-			}
-		}
-	}
-	sort.SliceStable(cands, func(i, j int) bool { return cands[i].score > cands[j].score })
-	if len(cands) > HopSlots {
-		cands = cands[:HopSlots]
-	}
-	ids := make([]int64, len(cands))
-	for i, c := range cands {
-		ids[i] = c.chunk
-	}
-	byID, err := d.hitsByID(ids)
-	if err != nil {
-		return nil, err
-	}
-	var extra []Hit
-	for _, c := range cands {
-		if h, ok := byID[c.chunk]; ok {
-			h.Score = float64(c.score)
-			extra = append(extra, h)
-		}
-	}
-	keep := limit - len(extra)
-	if keep > len(hits) {
-		keep = len(hits)
-	}
-	return append(hits[:keep:keep], extra...), nil
-}
-
-// kindClause and kindArgs apply the caller's project and kind filter to the linked entries as well.
-func kindClause(f Filter) string {
-	s := ""
-	if f.Project != "" {
-		s += " AND n.project = ?"
-	}
-	if len(f.Kinds) > 0 {
-		s += " AND n.kind IN (" + strings.TrimSuffix(strings.Repeat("?,", len(f.Kinds)), ",") + ")"
-	}
-	return s
-}
-
-func kindArgs(node string, f Filter) []any {
-	a := []any{node}
-	if f.Project != "" {
-		a = append(a, f.Project)
-	}
-	for _, k := range f.Kinds {
-		a = append(a, k)
-	}
-	return a
 }

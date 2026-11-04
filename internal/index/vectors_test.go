@@ -206,48 +206,6 @@ func TestOldSchemaIsRebuilt(t *testing.T) {
 	}
 }
 
-func TestOneHopAddsLinkedEntriesInReservedPlacesOnly(t *testing.T) {
-	repo, _ := fixture(t)
-	write(t, repo, "wiki/alpha/seed.md", "# Seed\n\nThe seed entry talks about turbines and rotors in detail. See [[Linked]] and [[Other]].\n")
-	write(t, repo, "wiki/alpha/linked.md", "# Linked\n\nBlade pitch actuators fail when the hydraulic fluid is contaminated.\n")
-	write(t, repo, "wiki/alpha/unrelated.md", "# Unrelated\n\nTurbines turbines turbines and rotors rotors from another angle.\n")
-	d := openDB(t)
-	d.Rescan(repo)
-	e := &bagEmbedder{model: "bag"}
-	d.EmbedPending(context.Background(), e, nil)
-	m, _ := d.LoadMatrix("bag")
-	q := "turbines rotors"
-	off, via0, _ := d.HybridOpts(context.Background(), e, m, q, Filter{Limit: 5, Kinds: []string{"wiki"}}, false)
-	on, via1, _ := d.HybridOpts(context.Background(), e, m, q, Filter{Limit: 5, Kinds: []string{"wiki"}}, true)
-	if strings.Contains(via0, "hop") || !strings.HasSuffix(via1, "+hop") {
-		t.Fatalf("via off %q on %q", via0, via1)
-	}
-	has := func(hs []Hit, id string) bool {
-		for _, h := range hs {
-			if h.NodeID == id {
-				return true
-			}
-		}
-		return false
-	}
-	if has(off, "wiki/alpha/linked") {
-		t.Fatalf("the linked entry should not be a direct hit for this query: %+v", off)
-	}
-	if !has(on, "wiki/alpha/linked") || len(on) > 5 {
-		t.Fatalf("one-hop must add the linked entry within the limit: %+v", on)
-	}
-	if !has(on, "wiki/alpha/seed") {
-		t.Fatalf("the seed must stay: %+v", on)
-	}
-	// without vectors the pass does nothing
-	d2 := openDB(t)
-	d2.Rescan(repo)
-	m2, _ := d2.LoadMatrix("bag")
-	if got, via, _ := d2.HybridOpts(context.Background(), e, m2, q, Filter{Limit: 5}, true); strings.Contains(via, "hop") || len(got) == 0 {
-		t.Fatalf("no vectors: via %q", via)
-	}
-}
-
 func TestBestKeywordHitsKeepAPlace(t *testing.T) {
 	repo, _ := fixture(t)
 	// The exact entry holds the identifier and little else. Ten others repeat the query's ordinary words, so they are
