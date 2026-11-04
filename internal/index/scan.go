@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync/atomic"
 
 	"github.com/tomRumi/harness-memory-service/internal/chunk"
 	"github.com/tomRumi/harness-memory-service/internal/md"
@@ -84,7 +85,7 @@ var (
 // secretSuffix names files that usually hold credentials or keys. They are never indexed, because everything
 // indexed can be returned to an agent.
 var secretSuffix = map[string]bool{".pem": true, ".key": true, ".p12": true, ".pfx": true, ".kdbx": true, ".jks": true, ".keystore": true,
-	".tfstate": true, ".tfvars": true}
+	".tfstate": true, ".tfvars": true, ".ppk": true, ".gpg": true, ".asc": true}
 
 // secretName lists whole file names that hold credentials in the common frameworks and tools.
 var secretName = map[string]bool{"wp-config.php": true, "auth.json": true, "service-account.json": true, "kubeconfig": true,
@@ -169,14 +170,18 @@ func resolveRoot(repo, root string) (string, error) {
 func gather(repo string) (cands []cand, warns []string, keep []string, err error) {
 	for _, kind := range []string{"wiki", "notes", "facts"} {
 		root := filepath.Join(repo, kind)
+		if r, rerr := filepath.EvalSymlinks(root); rerr == nil { // wiki/, notes/ or facts/ may be a link
+			root = r
+		}
 		werr := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				if os.IsNotExist(err) {
 					return filepath.SkipDir
 				}
-				rel, _ := filepath.Rel(repo, path)
-				warns = append(warns, filepath.ToSlash(rel)+": unreadable, existing entries under it are kept")
-				keep = append(keep, filepath.ToSlash(rel))
+				inside, _ := filepath.Rel(root, path)
+				rel := kind + "/" + filepath.ToSlash(inside)
+				warns = append(warns, rel+": unreadable, existing entries under it are kept")
+				keep = append(keep, rel)
 				if d != nil && d.IsDir() {
 					return filepath.SkipDir
 				}
@@ -188,11 +193,11 @@ func gather(repo string) (cands []cand, warns []string, keep []string, err error
 				}
 				return nil
 			}
-			if !d.Type().IsRegular() || !strings.HasSuffix(d.Name(), ".md") { // a symlink could point outside the repository
+			if !d.Type().IsRegular() || !strings.HasSuffix(d.Name(), ".md") || strings.HasPrefix(d.Name(), ".") { // a symlink could point outside the repository
 				return nil
 			}
-			rel, _ := filepath.Rel(repo, path)
-			rel = filepath.ToSlash(rel)
+			inside, _ := filepath.Rel(root, path)
+			rel := kind + "/" + filepath.ToSlash(inside)
 			cands = append(cands, cand{id: strings.TrimSuffix(rel, ".md"), kind: kind, rel: rel, abs: path})
 			return nil
 		})
@@ -219,6 +224,9 @@ func gather(repo string) (cands []cand, warns []string, keep []string, err error
 			ignore[d] = true
 		}
 		for _, rawRoot := range pr.CodeRoots {
+			if strings.TrimSpace(rawRoot) == "" {
+				return nil, nil, nil, fmt.Errorf("project %s: an empty code root would be the memory repository itself", pr.Name)
+			}
 			root, rerr := resolveRoot(repo, rawRoot)
 			if rerr != nil {
 				return nil, nil, nil, fmt.Errorf("project %s: code root %q: %w (refusing to rescan: that would remove the project's code entries)", pr.Name, rawRoot, rerr)
@@ -266,40 +274,49 @@ func gather(repo string) (cands []cand, warns []string, keep []string, err error
 }
 
 // keyBlockRe matches a private key block. A file holding one is never indexed.
-var keyBlockRe = regexp.MustCompile("-----BEGIN [A-Z ]*PRIVATE" + " KEY-----") // split so the leak gate does not match its own source
+var keyBlockRe = regexp.MustCompile("-----BEGIN [A-Z ]*PRIVATE" + " KEY( BLOCK)?-----|PuTTY-User-" + "Key-File") // split so the leak gate does not match its own source
 
 // credAssignRe matches a credential-looking assignment. Source code is full of false positives (a name on the left,
 // a function call on the right), so a hit is reported and the file is still indexed.
 var credAssignRe = regexp.MustCompile(`(?i)(password|passwd|secret|token|api_?key|private_?key)[a-z0-9_]*\s*[:=]\s*["']?[A-Za-z0-9/+_=-]{12,}`)
 
-// load turns one candidate into a parsed node. ok is false when the file is not to be indexed (binary, too large,
-// empty, holds a private key).
-func (c cand) load(raw []byte) (p parsed, warn string, ok bool) {
+// prepare decides whether a file is to be indexed and returns its content hash, without chunking it: a file whose
+// hash has not changed is never chunked. ok is false for a binary file, an oversized or empty one, or one that
+// holds a private key block.
+func (c cand) prepare(raw []byte) (hash, warn string, ok bool) {
+	if c.kind != "code" {
+		return sum(raw), "", true
+	}
+	if isBinary(raw) || len(raw) > maxCodeBytes || len(strings.TrimSpace(string(raw))) == 0 {
+		return "", "", false
+	}
+	if strings.HasSuffix(strings.ToLower(c.rel), ".json") && len(raw) > maxJSONBytes {
+		return "", "", false
+	}
+	if keyBlockRe.Match(raw) {
+		return "", c.id + ": holds a private key block, not indexed", false
+	}
+	if credAssignRe.Match(raw) {
+		warn = c.id + ": credential-like text (indexed; review the file)"
+	}
+	return sum(raw), warn, true
+}
+
+// parseCalls counts parse calls; a test uses it to show that an unchanged file is not chunked again.
+var parseCalls atomic.Int64
+
+// parse chunks a file that prepare accepted.
+func (c cand) parse(raw []byte) (parsed, string) {
+	parseCalls.Add(1)
 	if c.kind != "code" {
 		pw := parseMarkdown(c.kind, c.rel, raw)
 		if pw.warn != "" {
 			pw.warn = c.rel + ": " + pw.warn
 		}
-		return pw.parsed, pw.warn, true
-	}
-	if isBinary(raw) || len(raw) > maxCodeBytes {
-		return parsed{}, "", false
-	}
-	if strings.HasSuffix(strings.ToLower(c.rel), ".json") && len(raw) > maxJSONBytes {
-		return parsed{}, "", false
-	}
-	if keyBlockRe.Match(raw) {
-		return parsed{}, c.id + ": holds a private key block, not indexed", false
-	}
-	pieces := chunk.Code(string(raw))
-	if len(pieces) == 0 {
-		return parsed{}, "", false
-	}
-	if credAssignRe.Match(raw) {
-		warn = c.id + ": credential-like text (indexed; review the file)"
+		return pw.parsed, pw.warn
 	}
 	return parsed{node: nodeRow{ID: c.id, Kind: "code", Project: c.project, Path: c.rel, Title: filepath.Base(c.rel),
-		Status: "active", Hash: sum(raw)}, chunks: pieces}, warn, true
+		Status: "active", Hash: sum(raw)}, chunks: chunk.Code(string(raw))}, ""
 }
 
 type parsedWithWarn struct {
@@ -409,7 +426,7 @@ func (d *DB) Rescan(repo string) (Result, error) {
 			present[c.id] = true
 			continue
 		}
-		p, warn, ok := c.load(raw)
+		hash, warn, ok := c.prepare(raw)
 		if warn != "" {
 			res.Warnings = append(res.Warnings, warn)
 		}
@@ -418,8 +435,16 @@ func (d *DB) Rescan(repo string) (Result, error) {
 		}
 		present[c.id] = true
 		old, had := existing[c.id]
-		if had && old == p.node.Hash {
+		if had && old == hash {
 			res.Unchanged++
+			continue
+		}
+		p, pwarn := c.parse(raw)
+		if pwarn != "" {
+			res.Warnings = append(res.Warnings, pwarn)
+		}
+		if len(p.chunks) == 0 && c.kind == "code" { // nothing left after chunking
+			delete(present, c.id)
 			continue
 		}
 		if had {

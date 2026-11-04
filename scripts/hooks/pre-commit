@@ -10,11 +10,12 @@ cd "$root" || exit 1
 fail=0
 report() { printf 'leak gate: %s\n' "$1" >&2; fail=1; }
 
-# --text: a binary file is scanned as text, not summarised as "Binary files differ".
+# --text: a binary file is scanned as text, not summarised as "Binary files differ". tr turns NUL bytes into line breaks
+# (awk would cut a line at the first NUL). T is a type change (a symlink replaced by a file). No textconv or external diff driver runs.
 # awk skips the per-file header lines (everything between "diff --git" and the first "@@"), so a content line that
 # itself starts with "++" is still checked.
-added=$(git diff --cached -U0 --no-color --text --diff-filter=AMR | awk '/^diff --git /{hdr=1; next} /^@@/{hdr=0; next} hdr{next} /^\+/{print substr($0,2)}' || true)
-names=$(git diff --cached --name-only --diff-filter=AMR || true)
+added=$(git diff --cached -U0 --no-color --no-textconv --no-ext-diff --text --diff-filter=ACMRT | tr '\000' '\n' | awk '/^diff --git /{hdr=1; next} /^@@/{hdr=0; next} hdr{next} /^\+/{print substr($0,2)}' || true)
+names=$(git diff --cached --name-only --diff-filter=ACMRT || true)
 
 check_shape() { # label, extended regex, text
   # Report the rule and the line number only: the matched text may itself be the secret.
@@ -25,12 +26,17 @@ check_shape() { # label, extended regex, text
 for text in "$added" "$names"; do
   check_shape "absolute home path" '/(Users|home)/[A-Za-z0-9_.-]+/' "$text"
   check_shape "credential assignment" '(PASSWORD|PASSWD|SECRET|TOKEN|API_?KEY|PRIVATE_?KEY)[A-Za-z0-9_]*[[:space:]]*[:=][[:space:]]*["'"'"']?[A-Za-z0-9/+_.=-]{8,}' "$text"
-  check_shape "private key block" '-----BEGIN [A-Z ]*PRIVATE KEY-----' "$text"
-  check_shape "public IPv4 address" '\b([1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.([0-9]{1,3}\.){2}[0-9]{1,3}\b' "$(printf '%s\n' "$text" | grep -v -E '127\.0\.0\.1|0\.0\.0\.0|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.|10\.0\.0\.|192\.168\.' || true)"
+  check_shape "private key block" '-----BEGIN [A-Z ]*PRIVATE KEY( BLOCK)?-----|PuTTY-User-''Key-File' "$text"
+  # Private ranges are removed from the text first, so a public address on the same line is still found.
+  # (BSD sed has no \b, so the ranges are anchored by a non-digit on each side; run twice for neighbours.)
+  priv='(127\.0\.0\.1|0\.0\.0\.0|192\.0\.2\.[0-9]+|198\.51\.100\.[0-9]+|203\.0\.113\.[0-9]+|10\.[0-9]+\.[0-9]+\.[0-9]+|192\.168\.[0-9]+\.[0-9]+|172\.(1[6-9]|2[0-9]|3[01])\.[0-9]+\.[0-9]+)'
+  pub=$(printf '%s\n' "$text" | sed -E "s/(^|[^0-9.])$priv([^0-9.]|\$)/\1 \4/g; s/(^|[^0-9.])$priv([^0-9.]|\$)/\1 \4/g")
+  check_shape "public IPv4 address" '\b([1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])\.([0-9]{1,3}\.){2}[0-9]{1,3}\b' "$pub"
 done
 
 if [ -f .leak-denylist ]; then
   while IFS= read -r word || [ -n "$word" ]; do
+    word=$(printf '%s' "$word" | tr -d '\r')
     case "$word" in ''|'#'*) continue;; esac
     for text in "$added" "$names"; do
       if printf '%s\n' "$text" | grep -F -i -q -- "$word"; then

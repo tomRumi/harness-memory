@@ -25,7 +25,7 @@ type Filter struct {
 	Limit   int
 }
 
-var word = regexp.MustCompile(`[\p{L}\p{N}_]+`)
+var word = regexp.MustCompile(`[\p{L}\p{M}\p{N}_]+`)
 
 var stop = map[string]bool{}
 

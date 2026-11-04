@@ -374,3 +374,76 @@ func TestPrivateKeyFilesAndSecretNamesAreNeverIndexed(t *testing.T) {
 		t.Fatalf("expected a key-block warning and a credential-like warning: %v", res.Warnings)
 	}
 }
+
+func TestLayerRootThatIsASymlinkKeepsItsNodes(t *testing.T) {
+	repo, _ := fixture(t)
+	d := openDB(t)
+	d.Rescan(repo)
+	before, _ := d.Stats()
+	real := filepath.Join(t.TempDir(), "wiki-real")
+	os.Rename(filepath.Join(repo, "wiki"), real)
+	if err := os.Symlink(real, filepath.Join(repo, "wiki")); err != nil {
+		t.Fatal(err)
+	}
+	res, err := d.Rescan(repo)
+	if err != nil || res.Removed != 0 || res.Added != 0 {
+		t.Fatalf("a symlinked wiki/ must read like a directory: %+v %v", res, err)
+	}
+	if after, _ := d.Stats(); !reflect.DeepEqual(before, after) {
+		t.Fatalf("stats changed: %v -> %v", before, after)
+	}
+}
+
+func TestEmptyCodeRootIsRefused(t *testing.T) {
+	repo, _ := fixture(t)
+	write(t, repo, "projects.yaml", "projects:\n  - name: alpha\n    code_roots: ['']\n")
+	d := openDB(t)
+	if _, err := d.Rescan(repo); err == nil || !strings.Contains(err.Error(), "empty code root") {
+		t.Fatalf("%v", err)
+	}
+}
+
+func TestDecomposedAccentsAndHiddenMarkdown(t *testing.T) {
+	repo, _ := fixture(t)
+	write(t, repo, "wiki/alpha/hu2.md", "# Őrzés\n\nAz őrzés szabályai.\n")
+	write(t, repo, "wiki/alpha/.draft.md", "draft_hidden_marker\n")
+	d := openDB(t)
+	d.Rescan(repo)
+	nfd := "o\u030brze\u0301s" // "őrzés" written with combining marks
+	if hits, _ := d.Keyword(nfd, Filter{}); len(hits) == 0 || hits[0].NodeID != "wiki/alpha/hu2" {
+		t.Fatalf("decomposed query: %+v", hits)
+	}
+	if hits, _ := d.Keyword("draft_hidden_marker", Filter{}); len(hits) != 0 {
+		t.Fatalf("hidden markdown indexed: %+v", hits)
+	}
+}
+
+func TestPGPAndPuTTYKeysAreNotIndexed(t *testing.T) {
+	repo, code := fixture(t)
+	write(t, code, "pgp.txt", "-----BEGIN PGP PRIVATE"+" KEY BLOCK-----\npgp_body_marker\n")
+	write(t, code, "putty.txt", "PuTTY-User-"+"Key-File-3: ssh-rsa\nputty_body_marker\n")
+	write(t, code, "key.ppk", "ppk_body_marker\n")
+	d := openDB(t)
+	d.Rescan(repo)
+	for _, q := range []string{"pgp_body_marker", "putty_body_marker", "ppk_body_marker"} {
+		if hits, _ := d.Keyword(q, Filter{}); len(hits) != 0 {
+			t.Fatalf("%q was indexed", q)
+		}
+	}
+}
+
+func TestUnchangedFilesAreNotChunkedAgain(t *testing.T) {
+	repo, _ := fixture(t)
+	d := openDB(t)
+	d.Rescan(repo)
+	parseCalls.Store(0)
+	res, _ := d.Rescan(repo)
+	if res.Unchanged != 8 || parseCalls.Load() != 0 {
+		t.Fatalf("%+v parsed %d files", res, parseCalls.Load())
+	}
+	write(t, repo, "wiki/alpha/setup.md", "# Setup\n\nchanged text here\n")
+	d.Rescan(repo)
+	if parseCalls.Load() != 1 {
+		t.Fatalf("expected one parse, got %d", parseCalls.Load())
+	}
+}
