@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -82,7 +83,12 @@ var (
 
 // secretSuffix names files that usually hold credentials or keys. They are never indexed, because everything
 // indexed can be returned to an agent.
-var secretSuffix = map[string]bool{".pem": true, ".key": true, ".p12": true, ".pfx": true, ".kdbx": true, ".jks": true, ".keystore": true}
+var secretSuffix = map[string]bool{".pem": true, ".key": true, ".p12": true, ".pfx": true, ".kdbx": true, ".jks": true, ".keystore": true,
+	".tfstate": true, ".tfvars": true}
+
+// secretName lists whole file names that hold credentials in the common frameworks and tools.
+var secretName = map[string]bool{"wp-config.php": true, "auth.json": true, "service-account.json": true, "kubeconfig": true,
+	"htpasswd": true, "netrc": true, "npmrc": true, "pypirc": true}
 
 // dataSuffix names tabular and record formats. They are data, not code: a recall for a function name would
 // only ever hit rows of them, and they make up most of the chunks of a working tree.
@@ -105,7 +111,8 @@ func skipCode(rel string, ignore map[string]bool) bool {
 	}
 	base := parts[len(parts)-1]
 	low := strings.ToLower(base)
-	if secretSuffix[filepath.Ext(low)] || strings.HasPrefix(low, "id_rsa") || strings.HasPrefix(low, "id_ed25519") {
+	if secretSuffix[filepath.Ext(low)] || strings.HasPrefix(low, "id_rsa") || strings.HasPrefix(low, "id_ed25519") ||
+		secretName[low] || strings.HasPrefix(low, "secret") || strings.HasPrefix(low, "credential") {
 		return true
 	}
 	if skipBase[base] || strings.HasSuffix(low, ".min.js") || strings.HasSuffix(low, ".min.css") {
@@ -114,62 +121,120 @@ func skipCode(rel string, ignore map[string]bool) bool {
 	if skipSuffix[strings.ToLower(filepath.Ext(base))] || dataSuffix[strings.ToLower(filepath.Ext(base))] {
 		return true
 	}
-	lr := strings.ToLower(rel)
-	if strings.HasSuffix(low, ".json") && (strings.Contains(lr, "cache") || strings.Contains(lr, "db/") || strings.Contains(lr, "data/")) {
-		return true
+	if strings.HasSuffix(low, ".json") {
+		for _, seg := range parts[:len(parts)-1] {
+			l := strings.ToLower(seg)
+			if strings.Contains(l, "cache") || l == "db" || l == "data" {
+				return true
+			}
+		}
+		if strings.Contains(low, "cache") {
+			return true
+		}
 	}
 	return false
 }
 
-// collect parses every file the repository and the code roots currently hold, keyed by node id.
-func collect(repo string) (map[string]parsed, []string, error) {
-	out := map[string]parsed{}
-	var warns []string
+// cand is one file that may become a node. Nothing is read until Rescan decides it has to.
+type cand struct {
+	id, kind, project, rel, abs string // kind is wiki, notes, facts or code
+}
+
+// maxCodeBytes bounds what is read from one code file; a larger file is data, not source.
+const maxCodeBytes = 2_000_000
+
+// resolveRoot makes a code root absolute (a relative root is relative to the memory repository, not to the
+// working directory) and follows a symlink, so a root that is a link works.
+func resolveRoot(repo, root string) (string, error) {
+	if strings.HasPrefix(root, "~/") {
+		if h, err := os.UserHomeDir(); err == nil {
+			root = filepath.Join(h, root[2:])
+		}
+	}
+	if !filepath.IsAbs(root) {
+		root = filepath.Join(repo, root)
+	}
+	r, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", err
+	}
+	if fi, err := os.Stat(r); err != nil || !fi.IsDir() {
+		return "", fmt.Errorf("not a directory")
+	}
+	return r, nil
+}
+
+// gather lists the candidate files. Unreadable directories are reported and their node ids are returned in
+// keep, so a permission problem never deletes what the index already holds.
+func gather(repo string) (cands []cand, warns []string, keep []string, err error) {
 	for _, kind := range []string{"wiki", "notes", "facts"} {
 		root := filepath.Join(repo, kind)
-		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		werr := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				if os.IsNotExist(err) {
 					return filepath.SkipDir
 				}
-				return err
+				rel, _ := filepath.Rel(repo, path)
+				warns = append(warns, filepath.ToSlash(rel)+": unreadable, existing entries under it are kept")
+				keep = append(keep, filepath.ToSlash(rel))
+				if d != nil && d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
 			}
-			if d.IsDir() || !strings.HasSuffix(d.Name(), ".md") {
+			if d.IsDir() {
+				if path != root && strings.HasPrefix(d.Name(), ".") { // .obsidian, .trash, .git ...
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if !d.Type().IsRegular() || !strings.HasSuffix(d.Name(), ".md") { // a symlink could point outside the repository
 				return nil
 			}
 			rel, _ := filepath.Rel(repo, path)
 			rel = filepath.ToSlash(rel)
-			raw, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			p := parseMarkdown(kind, rel, raw)
-			if w := p.warn; w != "" {
-				warns = append(warns, rel+": "+w)
-			}
-			out[p.node.ID] = p.parsed
+			cands = append(cands, cand{id: strings.TrimSuffix(rel, ".md"), kind: kind, rel: rel, abs: path})
 			return nil
 		})
-		if err != nil {
-			return nil, nil, err
+		if werr != nil {
+			return nil, nil, nil, werr
 		}
 	}
-	projects, err := LoadProjects(repo)
-	if err != nil {
-		return nil, nil, err
+	projects, perr := LoadProjects(repo)
+	if perr != nil {
+		return nil, nil, nil, perr
 	}
+	seenProject := map[string]bool{}
+	seenID := map[string]string{}
 	for _, pr := range projects {
+		if pr.Name == "" || strings.ContainsAny(pr.Name, "/\\ ") || strings.HasPrefix(pr.Name, ".") {
+			return nil, nil, nil, fmt.Errorf("projects.yaml: invalid project name %q (no slash, backslash, space or leading dot)", pr.Name)
+		}
+		if seenProject[pr.Name] {
+			return nil, nil, nil, fmt.Errorf("projects.yaml: project %q is listed twice", pr.Name)
+		}
+		seenProject[pr.Name] = true
 		ignore := map[string]bool{}
 		for _, d := range pr.IgnoreDirs {
 			ignore[d] = true
 		}
-		for _, root := range pr.CodeRoots {
-			err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-				if err != nil {
-					return err
-				}
+		for _, rawRoot := range pr.CodeRoots {
+			root, rerr := resolveRoot(repo, rawRoot)
+			if rerr != nil {
+				return nil, nil, nil, fmt.Errorf("project %s: code root %q: %w (refusing to rescan: that would remove the project's code entries)", pr.Name, rawRoot, rerr)
+			}
+			found := 0
+			werr := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 				rel, _ := filepath.Rel(root, path)
 				rel = filepath.ToSlash(rel)
+				if err != nil {
+					warns = append(warns, "code/"+pr.Name+"/"+rel+": unreadable, existing entries under it are kept")
+					keep = append(keep, "code/"+pr.Name+"/"+rel)
+					if d != nil && d.IsDir() {
+						return filepath.SkipDir
+					}
+					return nil
+				}
 				if d.IsDir() {
 					if rel != "." && (skipParts[d.Name()] || ignore[d.Name()] || strings.HasPrefix(d.Name(), ".")) {
 						return filepath.SkipDir
@@ -179,28 +244,62 @@ func collect(repo string) (map[string]parsed, []string, error) {
 				if !d.Type().IsRegular() || skipCode(rel, ignore) {
 					return nil
 				}
-				raw, err := os.ReadFile(path)
-				if err != nil || isBinary(raw) {
-					return nil
-				}
-				if strings.HasSuffix(strings.ToLower(rel), ".json") && len(raw) > maxJSONBytes {
-					return nil
-				}
-				pieces := chunk.Code(string(raw))
-				if len(pieces) == 0 {
-					return nil
-				}
+				found++
 				id := "code/" + pr.Name + "/" + rel
-				out[id] = parsed{node: nodeRow{ID: id, Kind: "code", Project: pr.Name, Path: rel, Title: filepath.Base(rel),
-					Status: "active", Hash: sum(raw)}, chunks: pieces}
+				if prev, dup := seenID[id]; dup {
+					warns = append(warns, id+": also found under "+prev+"; the first code root wins")
+					return nil
+				}
+				seenID[id] = root
+				cands = append(cands, cand{id: id, kind: "code", project: pr.Name, rel: rel, abs: path})
 				return nil
 			})
-			if err != nil {
-				return nil, nil, fmt.Errorf("code root %s: %w", root, err)
+			if werr != nil {
+				return nil, nil, nil, fmt.Errorf("code root %s: %w", rawRoot, werr)
+			}
+			if found == 0 {
+				return nil, nil, nil, fmt.Errorf("project %s: code root %q yielded no files (refusing to rescan: that would remove the project's code entries)", pr.Name, rawRoot)
 			}
 		}
 	}
-	return out, warns, nil
+	return cands, warns, keep, nil
+}
+
+// keyBlockRe matches a private key block. A file holding one is never indexed.
+var keyBlockRe = regexp.MustCompile("-----BEGIN [A-Z ]*PRIVATE" + " KEY-----") // split so the leak gate does not match its own source
+
+// credAssignRe matches a credential-looking assignment. Source code is full of false positives (a name on the left,
+// a function call on the right), so a hit is reported and the file is still indexed.
+var credAssignRe = regexp.MustCompile(`(?i)(password|passwd|secret|token|api_?key|private_?key)[a-z0-9_]*\s*[:=]\s*["']?[A-Za-z0-9/+_=-]{12,}`)
+
+// load turns one candidate into a parsed node. ok is false when the file is not to be indexed (binary, too large,
+// empty, holds a private key).
+func (c cand) load(raw []byte) (p parsed, warn string, ok bool) {
+	if c.kind != "code" {
+		pw := parseMarkdown(c.kind, c.rel, raw)
+		if pw.warn != "" {
+			pw.warn = c.rel + ": " + pw.warn
+		}
+		return pw.parsed, pw.warn, true
+	}
+	if isBinary(raw) || len(raw) > maxCodeBytes {
+		return parsed{}, "", false
+	}
+	if strings.HasSuffix(strings.ToLower(c.rel), ".json") && len(raw) > maxJSONBytes {
+		return parsed{}, "", false
+	}
+	if keyBlockRe.Match(raw) {
+		return parsed{}, c.id + ": holds a private key block, not indexed", false
+	}
+	pieces := chunk.Code(string(raw))
+	if len(pieces) == 0 {
+		return parsed{}, "", false
+	}
+	if credAssignRe.Match(raw) {
+		warn = c.id + ": credential-like text (indexed; review the file)"
+	}
+	return parsed{node: nodeRow{ID: c.id, Kind: "code", Project: c.project, Path: c.rel, Title: filepath.Base(c.rel),
+		Status: "active", Hash: sum(raw)}, chunks: pieces}, warn, true
 }
 
 type parsedWithWarn struct {
@@ -258,10 +357,11 @@ func parseMarkdown(kind, rel string, raw []byte) parsedWithWarn {
 }
 
 // Rescan makes the index match the files under repo (and the code roots in projects.yaml).
-// A node is re-read only when its content hash differs; nodes whose files are gone are removed.
+// A file is read and chunked only when its content hash differs from the stored one; nodes whose files are gone
+// are removed; nodes under an unreadable path are kept.
 func (d *DB) Rescan(repo string) (Result, error) {
 	var res Result
-	files, warns, err := collect(repo)
+	cands, warns, keep, err := gather(repo)
 	if err != nil {
 		return res, err
 	}
@@ -279,6 +379,10 @@ func (d *DB) Rescan(repo string) (Result, error) {
 		}
 		existing[id] = h
 	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return res, err
+	}
 	rows.Close()
 
 	tx, err := d.Begin()
@@ -293,34 +397,58 @@ func (d *DB) Rescan(repo string) (Result, error) {
 		_, err := tx.Exec(`DELETE FROM nodes WHERE id=?`, id) // chunks and edges cascade
 		return err
 	}
-	ids := make([]string, 0, len(files))
-	for id := range files {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	for _, id := range ids {
-		p := files[id]
-		old, had := existing[id]
+	sort.Slice(cands, func(i, j int) bool { return cands[i].id < cands[j].id })
+	present := make(map[string]bool, len(cands))
+	for _, c := range cands {
+		if fi, err := os.Stat(c.abs); err == nil && c.kind == "code" && fi.Size() > maxCodeBytes {
+			continue // too large to be source; treated as absent
+		}
+		raw, err := os.ReadFile(c.abs)
+		if err != nil {
+			res.Warnings = append(res.Warnings, c.id+": unreadable, existing entry is kept")
+			present[c.id] = true
+			continue
+		}
+		p, warn, ok := c.load(raw)
+		if warn != "" {
+			res.Warnings = append(res.Warnings, warn)
+		}
+		if !ok {
+			continue
+		}
+		present[c.id] = true
+		old, had := existing[c.id]
 		if had && old == p.node.Hash {
 			res.Unchanged++
 			continue
 		}
 		if had {
-			if err := remove(id); err != nil {
+			if err := remove(c.id); err != nil {
 				return res, err
 			}
 			res.Changed++
-			res.ChangedIDs = append(res.ChangedIDs, id)
+			res.ChangedIDs = append(res.ChangedIDs, c.id)
 		} else {
 			res.Added++
 		}
 		if err := insert(tx, p); err != nil {
-			return res, fmt.Errorf("%s: %w", id, err)
+			return res, fmt.Errorf("%s: %w", c.id, err)
 		}
 	}
 	var gone []string
 	for id := range existing {
-		if _, ok := files[id]; !ok {
+		if present[id] {
+			continue
+		}
+		kept := false
+		for _, k := range keep {
+			k = strings.TrimSuffix(k, ".md")
+			if id == k || strings.HasPrefix(id, k+"/") {
+				kept = true
+				break
+			}
+		}
+		if !kept {
 			gone = append(gone, id)
 		}
 	}

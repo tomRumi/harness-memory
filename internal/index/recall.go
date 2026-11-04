@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 // Hit is one chunk returned by recall.
@@ -19,7 +20,7 @@ type Filter struct {
 	Limit   int
 }
 
-var word = regexp.MustCompile(`[A-Za-z0-9_]+`)
+var word = regexp.MustCompile(`[\p{L}\p{N}_]+`)
 
 var stop = map[string]bool{}
 
@@ -35,7 +36,7 @@ func MatchQuery(q string) string {
 	seen := map[string]bool{}
 	var terms []string
 	for _, w := range word.FindAllString(strings.ToLower(q), -1) {
-		if len(w) < 2 || stop[w] || seen[w] {
+		if utf8.RuneCountInString(w) < 2 || stop[w] || seen[w] {
 			continue
 		}
 		seen[w] = true

@@ -226,3 +226,151 @@ func TestCodeLayerNeverIndexesHiddenBinarySecretOrIgnoredFiles(t *testing.T) {
 		}
 	}
 }
+
+func TestAccentedQueriesFindAccentedAndPlainText(t *testing.T) {
+	repo, _ := fixture(t)
+	write(t, repo, "wiki/alpha/hu.md", "# Védelem\n\nAz árvíztűrő tükörfúrógép szabályai.\n")
+	d := openDB(t)
+	d.Rescan(repo)
+	for _, q := range []string{"árvíztűrő", "arvizturo", "ÁRVÍZTŰRŐ"} {
+		if hits, _ := d.Keyword(q, Filter{}); len(hits) == 0 || hits[0].NodeID != "wiki/alpha/hu" {
+			t.Fatalf("query %q: %+v", q, hits)
+		}
+	}
+}
+
+func TestCodeRootProblemsNeverDeleteTheLayer(t *testing.T) {
+	repo, code := fixture(t)
+	d := openDB(t)
+	d.Rescan(repo)
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(code, link); err != nil {
+		t.Fatal(err)
+	}
+	// a root that is a symlink works
+	write(t, repo, "projects.yaml", "projects:\n  - name: alpha\n    code_roots: ['"+link+"']\n    ignore_dirs: [backups]\n")
+	if res, err := d.Rescan(repo); err != nil || res.Removed != 0 {
+		t.Fatalf("symlinked root: %+v %v", res, err)
+	}
+	// a missing root is an error and the code entries stay
+	write(t, repo, "projects.yaml", "projects:\n  - name: alpha\n    code_roots: ['"+filepath.Join(code, "gone")+"']\n")
+	if _, err := d.Rescan(repo); err == nil {
+		t.Fatal("a missing code root must be an error")
+	}
+	st, _ := d.Stats()
+	if st["code/alpha"] != 2 {
+		t.Fatalf("code entries were lost: %v", st)
+	}
+	// a root that yields no files is an error
+	empty := t.TempDir()
+	write(t, repo, "projects.yaml", "projects:\n  - name: alpha\n    code_roots: ['"+empty+"']\n")
+	if _, err := d.Rescan(repo); err == nil {
+		t.Fatal("an empty code root must be an error")
+	}
+	// a relative root is relative to the memory repository, whatever the working directory is
+	rel := filepath.Join(repo, "src-copy")
+	write(t, rel, "a.py", "def relative_root_marker():\n    return 1\n")
+	write(t, repo, "projects.yaml", "projects:\n  - name: beta\n    code_roots: ['src-copy']\n")
+	cwd, _ := os.Getwd()
+	os.Chdir(t.TempDir())
+	defer os.Chdir(cwd)
+	if _, err := d.Rescan(repo); err != nil {
+		t.Fatalf("relative root: %v", err)
+	}
+	if hits, _ := d.Keyword("relative_root_marker", Filter{Project: "beta"}); len(hits) != 1 {
+		t.Fatalf("relative root not read: %+v", hits)
+	}
+}
+
+func TestTwoRootsWithTheSamePathKeepTheFirstAndWarn(t *testing.T) {
+	repo, _ := fixture(t)
+	one, two := t.TempDir(), t.TempDir()
+	write(t, one, "README.md", "readme one\n")
+	write(t, two, "README.md", "readme two\n")
+	write(t, repo, "projects.yaml", "projects:\n  - name: beta\n    code_roots: ['"+one+"', '"+two+"']\n")
+	d := openDB(t)
+	res, err := d.Rescan(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, w := range res.Warnings {
+		found = found || strings.Contains(w, "first code root wins")
+	}
+	if !found {
+		t.Fatalf("no warning: %v", res.Warnings)
+	}
+	if hits, _ := d.Keyword("one", Filter{Project: "beta", Kinds: []string{"code"}}); len(hits) != 1 {
+		t.Fatalf("first root must win: %+v", hits)
+	}
+	for _, bad := range []string{"a/b", "has space", ".hidden", ""} {
+		write(t, repo, "projects.yaml", "projects:\n  - name: '"+bad+"'\n    code_roots: ['"+one+"']\n")
+		if _, err := d.Rescan(repo); err == nil {
+			t.Fatalf("project name %q must be refused", bad)
+		}
+	}
+}
+
+func TestUnreadablePathsAreReportedAndTheirNodesKept(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("permissions are not enforced for root")
+	}
+	repo, code := fixture(t)
+	write(t, code, "sub/inner.py", "def inner_marker_fn():\n    pass\n")
+	d := openDB(t)
+	d.Rescan(repo)
+	os.Chmod(filepath.Join(code, "sub"), 0)
+	defer os.Chmod(filepath.Join(code, "sub"), 0o755)
+	res, err := d.Rescan(repo)
+	if err != nil {
+		t.Fatalf("one unreadable directory must not stop the rescan: %v", err)
+	}
+	if res.Removed != 0 || len(res.Warnings) == 0 {
+		t.Fatalf("expected a warning and no removal: %+v", res)
+	}
+	if hits, _ := d.Keyword("inner_marker_fn", Filter{}); len(hits) != 1 {
+		t.Fatalf("node under the unreadable directory was dropped: %+v", hits)
+	}
+}
+
+func TestMarkdownSymlinksAndHiddenWikiDirsAreNotIndexed(t *testing.T) {
+	repo, _ := fixture(t)
+	outside := filepath.Join(t.TempDir(), "outside.md")
+	os.WriteFile(outside, []byte("outside_link_marker text\n"), 0o644)
+	os.Symlink(outside, filepath.Join(repo, "wiki/alpha/linked.md"))
+	write(t, repo, "wiki/alpha/.obsidian/cfg.md", "hidden_dir_marker\n")
+	d := openDB(t)
+	d.Rescan(repo)
+	for _, q := range []string{"outside_link_marker", "hidden_dir_marker"} {
+		if hits, _ := d.Keyword(q, Filter{}); len(hits) != 0 {
+			t.Fatalf("%q was indexed: %+v", q, hits)
+		}
+	}
+}
+
+func TestPrivateKeyFilesAndSecretNamesAreNeverIndexed(t *testing.T) {
+	repo, code := fixture(t)
+	write(t, code, "deploy.sh", "echo start\n"+"-----BEGIN RSA PRIV"+"ATE KEY-----\nabc\n")
+	write(t, code, "wp-config.php", "<?php define('DB_NAME', 'wpconfig_marker');\n")
+	write(t, code, "terraform.tfstate", "{\"tfstate_marker\": 1}\n")
+	write(t, code, "creds/credentials.json", "{\"credentials_marker\": 1}\n")
+	write(t, code, "settings.py", "API_"+"KEY = 'abcdefghijklmnop1234'\n")
+	d := openDB(t)
+	res, _ := d.Rescan(repo)
+	for _, q := range []string{"wpconfig_marker", "tfstate_marker", "credentials_marker", "start"} {
+		if hits, _ := d.Keyword(q, Filter{Kinds: []string{"code"}}); len(hits) != 0 {
+			t.Fatalf("%q reached the index: %+v", q, hits)
+		}
+	}
+	var keyWarn, credWarn bool
+	for _, w := range res.Warnings {
+		keyWarn = keyWarn || strings.Contains(w, "private key block")
+		credWarn = credWarn || strings.Contains(w, "settings.py") && strings.Contains(w, "credential-like")
+		if strings.Contains(w, "abcdefghijklmnop") {
+			t.Fatalf("a warning printed the matched value: %s", w)
+		}
+	}
+	if !keyWarn || !credWarn {
+		t.Fatalf("expected a key-block warning and a credential-like warning: %v", res.Warnings)
+	}
+}

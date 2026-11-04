@@ -10,12 +10,15 @@ cd "$root" || exit 1
 fail=0
 report() { printf 'leak gate: %s\n' "$1" >&2; fail=1; }
 
-added=$(git diff --cached -U0 --no-color --diff-filter=AMR | grep '^+' | grep -v '^+++' || true)
+# --text: a binary file is scanned as text, not summarised as "Binary files differ".
+# awk skips the per-file header lines (everything between "diff --git" and the first "@@"), so a content line that
+# itself starts with "++" is still checked.
+added=$(git diff --cached -U0 --no-color --text --diff-filter=AMR | awk '/^diff --git /{hdr=1; next} /^@@/{hdr=0; next} hdr{next} /^\+/{print substr($0,2)}' || true)
 names=$(git diff --cached --name-only --diff-filter=AMR || true)
 
 check_shape() { # label, extended regex, text
   # Report the rule and the line number only: the matched text may itself be the secret.
-  hit=$(printf '%s\n' "$3" | grep -E -n -- "$2" | head -1 | cut -d: -f1 || true)
+  hit=$(printf '%s\n' "$3" | grep -E -i -n -- "$2" | head -1 | cut -d: -f1 || true)
   [ -n "$hit" ] && report "$1 (added line $hit of the staged change)"
 }
 
@@ -31,7 +34,7 @@ if [ -f .leak-denylist ]; then
     case "$word" in ''|'#'*) continue;; esac
     for text in "$added" "$names"; do
       if printf '%s\n' "$text" | grep -F -i -q -- "$word"; then
-        report "deny-list value present (entry hidden): $(printf '%s' "$word" | cut -c1-2)***"
+        report "deny-list value present (entry not shown)"
         break
       fi
     done
