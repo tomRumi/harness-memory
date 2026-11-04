@@ -85,7 +85,23 @@ func (d *DB) HybridOpts(ctx context.Context, e Embedder, m *Matrix, query string
 		return ids[i] < ids[j]
 	})
 	if len(ids) > limit*3 {
-		ids = ids[:limit*3] // fetch a few more than needed in case some are not active any more
+		keep := map[int64]bool{}
+		for r, h := range kw { // the protected keyword hits must survive the cut
+			if r < ProtectKw {
+				keep[h.ChunkID] = true
+			}
+		}
+		cut := append([]int64(nil), ids[:limit*3]...) // a few more than needed, in case some are not active any more
+		in := map[int64]bool{}
+		for _, id := range cut {
+			in[id] = true
+		}
+		for id := range keep {
+			if !in[id] {
+				cut = append(cut, id)
+			}
+		}
+		ids = cut
 	}
 	byID, err := d.hitsByID(ids)
 	if err != nil {
