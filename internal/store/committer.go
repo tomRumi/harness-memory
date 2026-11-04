@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -18,7 +19,8 @@ import (
 type Committer struct {
 	repo    string
 	quiet   time.Duration
-	mu      sync.Mutex
+	mu      sync.Mutex // guards the fields below; never held while git runs
+	runMu   sync.Mutex // one flush at a time
 	paths   map[string]bool
 	timer   *time.Timer
 	backoff time.Duration
@@ -78,8 +80,18 @@ func (c *Committer) busyLocked() bool {
 	return false
 }
 
+// GitTimeout bounds every git call. A hung hook or a signing prompt must not hold up the service.
+const GitTimeout = 30 * time.Second
+
 func (c *Committer) git(args ...string) (string, error) {
-	out, err := exec.Command("git", append([]string{"-C", c.repo}, args...)...).CombinedOutput()
+	ctx, cancel := context.WithTimeout(context.Background(), GitTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", c.repo}, args...)...)
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_EDITOR=true")
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		return strings.TrimSpace(string(out)), fmt.Errorf("git %s: timed out after %s", args[0], GitTimeout)
+	}
 	return strings.TrimSpace(string(out)), err
 }
 
@@ -88,59 +100,88 @@ func (c *Committer) retryLocked(err error) {
 	c.lastErr = err
 	if c.backoff == 0 {
 		c.backoff = c.quiet
-	} else if c.backoff < 5*time.Minute {
+	} else {
 		c.backoff *= 2
+	}
+	if c.backoff > 5*time.Minute {
+		c.backoff = 5 * time.Minute
 	}
 	c.armLocked(c.backoff)
 }
 
-// Flush commits now. It is safe to call from several goroutines: calls are serialised.
+// Flush commits now. It is safe to call from several goroutines: calls are serialised. The state lock is not held
+// while git runs, so writers calling Notify and the health check never wait for git.
 func (c *Committer) Flush() {
+	c.runMu.Lock()
+	defer c.runMu.Unlock()
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.off || len(c.paths) == 0 {
+		c.mu.Unlock()
 		return
 	}
 	if c.busyLocked() {
 		c.armLocked(c.quiet) // wait the merge or rebase out; the files stay
+		c.mu.Unlock()
 		return
 	}
-	var add []string
+	snap := make([]string, 0, len(c.paths))
 	for p := range c.paths {
+		snap = append(snap, p)
+	}
+	c.mu.Unlock()
+	sort.Strings(snap)
+
+	err := c.commit(snap)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err != nil {
+		c.retryLocked(err)
+		return
+	}
+	for _, p := range snap {
+		delete(c.paths, p) // paths notified while git ran stay for the next round
+	}
+	c.backoff, c.lastErr = 0, nil
+	if len(c.paths) > 0 {
+		c.armLocked(c.quiet)
+	}
+}
+
+// commit stages the given files and commits them. It returns nil when there was nothing to commit.
+func (c *Committer) commit(snap []string) error {
+	var add []string
+	for _, p := range snap {
 		if _, err := os.Stat(filepath.Join(c.repo, filepath.FromSlash(p))); err == nil {
 			add = append(add, p)
 		}
 	}
-	sort.Strings(add)
 	if len(add) > 0 {
 		if out, err := c.git(append([]string{"add", "--"}, add...)...); err != nil {
-			c.retryLocked(fmt.Errorf("git add: %v: %s", err, out))
-			return
+			return fmt.Errorf("git add: %v: %s", err, out)
 		}
 	}
 	staged, err := c.git("diff", "--cached", "--name-only")
 	if err != nil {
-		c.retryLocked(fmt.Errorf("git diff --cached: %v: %s", err, staged))
-		return
+		return fmt.Errorf("git diff --cached: %v: %s", err, staged)
 	}
 	if staged == "" {
-		c.paths, c.backoff, c.lastErr = map[string]bool{}, 0, nil
-		return
+		return nil
 	}
 	for _, f := range strings.Split(staged, "\n") {
 		if !strings.HasPrefix(f, "notes/") && !strings.HasPrefix(f, "facts/") {
 			// the owner has staged something else; committing now would sweep it into a memory commit
-			c.retryLocked(fmt.Errorf("not committing: %q is staged and is not a note or a fact", f))
-			return
+			return fmt.Errorf("not committing: %q is staged and is not a note or a fact", f)
 		}
 	}
-	msg := fmt.Sprintf("memory: %d change(s)", len(c.paths))
+	msg := fmt.Sprintf("memory: %d change(s)", len(snap))
 	if out, err := c.git("-c", "user.name=hms", "-c", "user.email=hms@localhost", "commit", "-q", "-m", msg); err != nil {
-		c.retryLocked(fmt.Errorf("git commit: %v: %s", err, out))
-		return
+		return fmt.Errorf("git commit: %v: %s", err, out)
 	}
-	c.paths, c.backoff, c.lastErr = map[string]bool{}, 0, nil
+	c.mu.Lock()
 	c.commits++
+	c.mu.Unlock()
+	return nil
 }
 
 // Sweep notes the notes and facts that are on disk but not committed (for example after a crash) so that they are

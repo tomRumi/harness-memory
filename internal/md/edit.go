@@ -79,17 +79,32 @@ func SetKeys(src []byte, set map[string]any) ([]byte, error) {
 		bl = nil
 	}
 	done := map[string]bool{}
-	for i, l := range bl {
+	drop := map[int]bool{} // continuation lines of a value that was replaced
+	for i := 0; i < len(bl); i++ {
+		l := bl[i]
 		for _, k := range keys {
-			if strings.HasPrefix(l, k+":") && !done[k] {
-				cr := ""
-				if strings.HasSuffix(l, "\r") {
-					cr = "\r"
-				}
-				bl[i] = k + ": " + scalar(set[k]) + cr
-				done[k] = true
+			if done[k] || !(strings.HasPrefix(l, k+":") || strings.HasPrefix(l, `"`+k+`":`) || strings.HasPrefix(l, "'"+k+"':")) {
+				continue
+			}
+			cr := ""
+			if strings.HasSuffix(l, "\r") {
+				cr = "\r"
+			}
+			bl[i] = k + ": " + scalar(set[k]) + cr // a quoted key becomes a plain one: the same key, once
+			done[k] = true
+			for j := i + 1; j < len(bl) && (strings.HasPrefix(bl[j], " ") || strings.HasPrefix(bl[j], "\t")); j++ {
+				drop[j] = true // a block or folded value goes on over indented lines; they belong to the old value
 			}
 		}
+	}
+	if len(drop) > 0 {
+		kept := bl[:0:0]
+		for i, l := range bl {
+			if !drop[i] {
+				kept = append(kept, l)
+			}
+		}
+		bl = kept
 	}
 	for _, k := range keys {
 		if !done[k] {

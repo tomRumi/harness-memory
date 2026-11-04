@@ -476,7 +476,7 @@ func recallContext(p paths, proj string, hook bool, query string, vectors bool) 
 	defer cancel()
 	done := make(chan string, 1)
 	go func() {
-		d, err := index.Open(p.db)
+		d, err := index.OpenReadOnly(p.db)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "hms: memory unavailable:", err)
 			done <- ""
@@ -518,15 +518,16 @@ func projectOfDir(repo, dir string) string {
 	if err != nil {
 		return ""
 	}
+	best, bestLen := "", -1
 	for _, pr := range projects {
 		for _, root := range pr.CodeRoots {
 			if r, err := filepath.EvalSymlinks(root); err == nil {
 				root = r
 			}
-			if dir == root || strings.HasPrefix(dir, root+string(filepath.Separator)) {
-				return pr.Name
+			if (dir == root || strings.HasPrefix(dir, root+string(filepath.Separator))) && len(root) > bestLen {
+				best, bestLen = pr.Name, len(root) // the innermost root wins
 			}
 		}
 	}
-	return ""
+	return best
 }

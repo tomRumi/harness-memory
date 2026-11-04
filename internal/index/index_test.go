@@ -1,6 +1,7 @@
 package index
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -487,5 +488,50 @@ func TestBrokenLayerLinkAndRepoRootAreRefused(t *testing.T) {
 		if _, err := d.Rescan(repo); err == nil {
 			t.Fatalf("code root %q must be refused", root)
 		}
+	}
+}
+
+func TestOpenReadOnlyNeverCreatesOrMigrates(t *testing.T) {
+	dir := t.TempDir()
+	missing := filepath.Join(dir, "none.db")
+	if _, err := OpenReadOnly(missing); err == nil {
+		t.Fatal("a missing index must be an error")
+	}
+	if _, err := os.Stat(missing); err == nil {
+		t.Fatal("OpenReadOnly created the file")
+	}
+	// an index of an older schema is refused and left exactly as it was
+	path := filepath.Join(dir, "old.db")
+	d, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Exec(`INSERT INTO nodes(id,kind,project,path,stem,title,status,retired_reason,superseded_by,pinned,note_kind,created_at,updated_at,content_hash) VALUES('wiki/p/a','wiki','p','wiki/p/a.md','a','A','active','','',0,'','','','h')`); err != nil {
+		t.Fatal(err)
+	}
+	d.Exec(`PRAGMA user_version = 3`)
+	d.Close()
+	if _, err := OpenReadOnly(path); err == nil || !strings.Contains(err.Error(), "rescan") {
+		t.Fatalf("an index of another schema must be refused with the cure: %v", err)
+	}
+	raw, _ := sql.Open("sqlite", "file:"+path+"?mode=ro")
+	var n, v int
+	raw.QueryRow(`SELECT count(*) FROM nodes`).Scan(&n)
+	raw.QueryRow(`PRAGMA user_version`).Scan(&v)
+	raw.Close()
+	if n != 1 || v != 3 {
+		t.Fatalf("the refused open changed the index: %d nodes, version %d", n, v)
+	}
+	// a current index opens and reads, and cannot be written through this handle
+	cur := filepath.Join(dir, "cur.db")
+	c, _ := Open(cur)
+	c.Close()
+	ro, err := OpenReadOnly(cur)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ro.Close()
+	if _, err := ro.Exec(`INSERT INTO meta(key,value) VALUES('x','y')`); err == nil {
+		t.Fatal("a read-only handle accepted a write")
 	}
 }

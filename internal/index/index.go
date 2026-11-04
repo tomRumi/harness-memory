@@ -54,7 +54,14 @@ func init() {
 		if !ok {
 			return nil
 		}
-		_, err := conn.ExecContext(context.Background(), "ATTACH DATABASE '"+strings.ReplaceAll(p.(string), "'", "''")+"' AS vec", nil)
+		target := p.(string)
+		if strings.Contains(dsn, "mode=ro") {
+			if _, err := os.Stat(target); err != nil {
+				return nil // a read-only open does not create the vector file; recall then has no vectors
+			}
+			target = "file:" + target + "?mode=ro"
+		}
+		_, err := conn.ExecContext(context.Background(), "ATTACH DATABASE '"+strings.ReplaceAll(target, "'", "''")+"' AS vec", nil)
 		return err
 	})
 }
@@ -105,6 +112,32 @@ func Open(path string) (*DB, error) {
 	if _, err := d.Exec(vectorSchema); err != nil {
 		d.Close()
 		return nil, fmt.Errorf("create vector cache: %w", err)
+	}
+	return &DB{DB: d, Path: path}, nil
+}
+
+// OpenReadOnly opens an existing index for reading only. It never creates the file, never changes the schema and
+// never drops anything: a missing file or a schema of another version is an error that names the cure. Hooks use it,
+// so that the first prompt after a binary upgrade cannot empty the index of a running service.
+func OpenReadOnly(path string) (*DB, error) {
+	if _, err := os.Stat(path); err != nil {
+		return nil, fmt.Errorf("no index at %s (run `hms rescan`)", path)
+	}
+	dsn := "file:" + path + "?mode=ro&_pragma=busy_timeout(5000)"
+	attach.Store(dsn, strings.TrimSuffix(path, ".db")+"-vectors.db")
+	d, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, err
+	}
+	d.SetMaxOpenConns(1)
+	var ver int
+	if err := d.QueryRow(`PRAGMA user_version`).Scan(&ver); err != nil {
+		d.Close()
+		return nil, err
+	}
+	if ver != schemaVersion {
+		d.Close()
+		return nil, fmt.Errorf("the index has schema version %d, this program needs %d (run `hms rescan`)", ver, schemaVersion)
 	}
 	return &DB{DB: d, Path: path}, nil
 }

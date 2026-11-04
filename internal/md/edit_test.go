@@ -43,3 +43,21 @@ func TestSetKeysNoFrontmatterAndRefusals(t *testing.T) {
 		t.Fatalf("%q", out)
 	}
 }
+
+func TestSetKeysMultiLineValuesAndQuotedKeys(t *testing.T) {
+	src := "---\nid: 7\nstatus: >-\n  active\n  really\ntitle: x\n---\nbody\n"
+	out, err := SetKeys([]byte(src), map[string]any{"status": "retired"})
+	if err != nil || string(out) != "---\nid: 7\nstatus: retired\ntitle: x\n---\nbody\n" {
+		t.Fatalf("%q %v", out, err)
+	}
+	if d := Parse(out); d.Error != "" || d.Str("status") != "retired" {
+		t.Fatalf("%+v", d)
+	}
+	out, err = SetKeys([]byte("---\n\"status\": active\nid: 1\n---\nb\n"), map[string]any{"status": "retired"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := Parse(out); d.Error != "" || d.Str("status") != "retired" || strings.Count(string(out), "status") != 1 {
+		t.Fatalf("%q %+v", out, d)
+	}
+}
