@@ -23,6 +23,7 @@ const (
 	WeightVec   = 1.0  // weight of the vector pass
 	WeightKw    = 1.0  // weight of the keyword pass
 	Candidates  = 50   // chunks taken from each pass before fusion
+	ProtectKw   = 2    // the best keyword hits always keep a place in the result (settings v2, see evidence/step-2.md)
 	HopSeeds    = 3    // the top hits whose links are followed
 	HopSlots    = 2    // result places reserved for linked entries
 	HopLinks    = 8    // links followed per seed

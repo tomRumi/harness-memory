@@ -91,14 +91,55 @@ func (d *DB) HybridOpts(ctx context.Context, e Embedder, m *Matrix, query string
 	if err != nil {
 		return nil, "", err
 	}
+	var ordered []int64 // active chunks in fused order
 	for _, id := range ids {
-		if h, ok := byID[id]; ok {
-			h.Score = score[id]
-			hits = append(hits, h)
-			if len(hits) == limit {
-				break
-			}
+		if _, ok := byID[id]; ok {
+			ordered = append(ordered, id)
 		}
+	}
+	// The best keyword hits keep a place: a chunk that is only moderately close in both passes can otherwise outscore an
+	// exact keyword match found by the keyword pass alone. They replace the lowest-ranked other places.
+	protect := map[int64]bool{}
+	for r, h := range kw {
+		if r >= ProtectKw {
+			break
+		}
+		if _, ok := byID[h.ChunkID]; ok {
+			protect[h.ChunkID] = true
+		}
+	}
+	final := ordered
+	if len(final) > limit {
+		final = append([]int64(nil), ordered[:limit]...)
+		in := map[int64]bool{}
+		for _, id := range final {
+			in[id] = true
+		}
+		for _, h := range kw {
+			if !protect[h.ChunkID] || in[h.ChunkID] {
+				continue
+			}
+			for i := len(final) - 1; i >= 0; i-- { // drop the lowest-ranked place that is not itself protected
+				if !protect[final[i]] {
+					delete(in, final[i])
+					final = append(final[:i], final[i+1:]...)
+					break
+				}
+			}
+			final = append(final, h.ChunkID)
+			in[h.ChunkID] = true
+		}
+		sort.SliceStable(final, func(i, j int) bool {
+			if score[final[i]] != score[final[j]] {
+				return score[final[i]] > score[final[j]]
+			}
+			return final[i] < final[j]
+		})
+	}
+	for _, id := range final {
+		hh := byID[id]
+		hh.Score = score[id]
+		hits = append(hits, hh)
 	}
 	via = "keyword"
 	if len(vecIDs) > 0 {

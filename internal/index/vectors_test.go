@@ -247,3 +247,26 @@ func TestOneHopAddsLinkedEntriesInReservedPlacesOnly(t *testing.T) {
 		t.Fatalf("no vectors: via %q", via)
 	}
 }
+
+func TestBestKeywordHitsKeepAPlace(t *testing.T) {
+	repo, _ := fixture(t)
+	// one entry matches the identifier exactly; many others are close in meaning to the query words but lack the identifier
+	write(t, repo, "wiki/alpha/exact.md", "# Exact\n\nThe quux_handler_7 function drops stale rows.\n")
+	for i := 0; i < 8; i++ {
+		write(t, repo, filepath.Join("wiki/alpha", "near"+string(rune('a'+i))+".md"),
+			"# Near\n\nA handler function that drops stale rows and old rows, handler handler function function rows.\n")
+	}
+	d := openDB(t)
+	d.Rescan(repo)
+	e := &bagEmbedder{model: "bag"}
+	d.EmbedPending(context.Background(), e, nil)
+	m, _ := d.LoadMatrix("bag")
+	hits, _, _ := d.Hybrid(context.Background(), e, m, "quux_handler_7 handler function drops stale rows", Filter{Limit: 3, Kinds: []string{"wiki"}})
+	found := false
+	for _, h := range hits {
+		found = found || h.NodeID == "wiki/alpha/exact"
+	}
+	if !found || len(hits) != 3 {
+		t.Fatalf("the exact keyword match must keep a place: %+v", hits)
+	}
+}
