@@ -59,7 +59,7 @@ type parsed struct {
 
 type nodeRow struct {
 	ID, Kind, Project, Path, Title, Status, RetiredReason, SupersededBy, NoteKind, Created, Updated, Hash string
-	Pinned                                                                                           bool
+	Pinned                                                                                                bool
 }
 
 type edge struct{ Relation, Object, Source string }
