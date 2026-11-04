@@ -479,7 +479,7 @@ func insert(tx *sql.Tx, p parsed) error {
 			return err
 		}
 		rowid, _ := res.LastInsertId()
-		if _, err := tx.Exec(`INSERT INTO chunks_fts(rowid,text) VALUES(?,?)`, rowid, c.Text); err != nil {
+		if _, err := tx.Exec(`INSERT INTO chunks_fts(rowid,text,meta) VALUES(?,?,?)`, rowid, c.Text, metaText(n)); err != nil {
 			return err
 		}
 	}
@@ -498,4 +498,10 @@ func isBinary(data []byte) bool {
 		n = 8192
 	}
 	return bytes.IndexByte(data[:n], 0) >= 0
+}
+
+// metaText is what a title or path match is searched in: the title, then the path with its separators as spaces
+// (a file can be found by its name or its directory).
+func metaText(n nodeRow) string {
+	return n.Title + " " + strings.NewReplacer("/", " ", ".", " ", "-", " ").Replace(n.Path)
 }

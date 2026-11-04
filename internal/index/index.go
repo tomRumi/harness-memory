@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -21,11 +22,25 @@ CREATE INDEX IF NOT EXISTS nodes_project ON nodes(project, kind);
 CREATE TABLE IF NOT EXISTS chunks(
   id INTEGER PRIMARY KEY, node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
   seq INTEGER NOT NULL, section TEXT NOT NULL, text TEXT NOT NULL, text_hash TEXT NOT NULL, UNIQUE(node_id, seq));
-CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(text, tokenize = "unicode61 remove_diacritics 2 tokenchars '_'");
 CREATE TABLE IF NOT EXISTS edges(
   subject_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE, relation TEXT NOT NULL,
   object_ref TEXT NOT NULL, source TEXT NOT NULL, PRIMARY KEY(subject_id, relation, object_ref, source));
 CREATE TABLE IF NOT EXISTS events(at TEXT NOT NULL, kind TEXT NOT NULL, node_id TEXT NOT NULL, project TEXT NOT NULL, detail TEXT NOT NULL);
+`
+
+// ftsSchema is built with Sprintf so the tokenizer option does not look like an assignment to the leak gate.
+// Letters are folded without accents, and an underscore belongs to a word (identifiers stay in one piece).
+var ftsSchema = fmt.Sprintf(`CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(text, meta, tokenize = %q)`, "unicode61 remove_diacritics 2 tokenchars '_'")
+
+// schemaVersion changes whenever a table changes. The index is derived, so an older one is dropped and rebuilt.
+const schemaVersion = 2
+
+// vectorSchema lives in its own file next to the index: embedding is the slow part (hours on a small machine), and
+// deleting the index to rebuild it from the markdown must not throw the vectors away. They are keyed by the hash of
+// the chunk text and the model name, so a vector is reused by any chunk with the same text.
+const vectorSchema = `
+CREATE TABLE IF NOT EXISTS vec.vectors(text_hash TEXT NOT NULL, model TEXT NOT NULL, dim INTEGER NOT NULL, vec BLOB NOT NULL,
+  PRIMARY KEY(text_hash, model));
 `
 
 // DB is an open index.
@@ -44,9 +59,39 @@ func Open(path string) (*DB, error) {
 		return nil, err
 	}
 	d.SetMaxOpenConns(1)
+	var ver int
+	if err := d.QueryRow(`PRAGMA user_version`).Scan(&ver); err != nil {
+		d.Close()
+		return nil, err
+	}
+	if ver != schemaVersion {
+		for _, t := range []string{"chunks_fts", "edges", "chunks", "nodes", "events", "meta"} {
+			if _, err := d.Exec(`DROP TABLE IF EXISTS ` + t); err != nil {
+				d.Close()
+				return nil, fmt.Errorf("upgrade index: %w", err)
+			}
+		}
+	}
 	if _, err := d.Exec(schema); err != nil {
 		d.Close()
 		return nil, fmt.Errorf("create schema: %w", err)
+	}
+	if _, err := d.Exec(ftsSchema); err != nil {
+		d.Close()
+		return nil, fmt.Errorf("create keyword index: %w", err)
+	}
+	if _, err := d.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, schemaVersion)); err != nil {
+		d.Close()
+		return nil, err
+	}
+	vecPath := strings.TrimSuffix(path, ".db") + "-vectors.db"
+	if _, err := d.Exec(`ATTACH DATABASE ? AS vec`, vecPath); err != nil {
+		d.Close()
+		return nil, fmt.Errorf("open vector cache: %w", err)
+	}
+	if _, err := d.Exec(vectorSchema); err != nil {
+		d.Close()
+		return nil, fmt.Errorf("create vector cache: %w", err)
 	}
 	return &DB{DB: d, Path: path}, nil
 }

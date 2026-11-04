@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -10,7 +11,9 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/tomRumi/harness-memory-service/internal/embed"
 	"github.com/tomRumi/harness-memory-service/internal/index"
 )
 
@@ -20,13 +23,15 @@ usage: hms [--home DIR] [--repo DIR] [--db FILE] <command> [arguments]
 
   init                         create the memory repository and the index
   rescan                       make the index match the files (changed files only)
-  recall [-p P] [-k K,K] [-n N] <words...>
-                               keyword recall over active nodes
+  embed [-reset]               embed every chunk that has no vector yet (wiki first, code last); safe to stop and rerun
+  recall [-p P] [-k K,K] [-n N] [-keyword] [-json] <words...>
+                               hybrid recall (vectors + keywords) over active nodes; -keyword skips the vectors
   stats                        node counts by kind and project
   hash                         digest of everything derived from files
   digests                      one digest per node, as JSON
 
-HMS_HOME, HMS_REPO and HMS_DB set the same locations. Default home: $XDG_DATA_HOME/harness-memory-service.
+HMS_HOME, HMS_REPO and HMS_DB set the same locations. The embedding model is set with HMS_EMBED_API (ollama or openai),
+HMS_EMBED_URL, HMS_EMBED_MODEL and HMS_EMBED_KEY; the default is nomic-embed-text on a local Ollama. Default home: $XDG_DATA_HOME/harness-memory-service.
 `
 
 type paths struct{ home, repo, db string }
@@ -100,6 +105,7 @@ func main() {
 		kinds := fs.String("k", "", "kinds, comma separated: wiki,code,note,fact")
 		n := fs.Int("n", 5, "number of hits")
 		asJSON := fs.Bool("json", false, "print hits as JSON, with the full text")
+		kwOnly := fs.Bool("keyword", false, "keyword pass only")
 		fs.Parse(rest)
 		d := open(p)
 		defer d.Close()
@@ -107,7 +113,29 @@ func main() {
 		if *kinds != "" {
 			f.Kinds = strings.Split(*kinds, ",")
 		}
-		hits, err := d.Keyword(strings.Join(fs.Args(), " "), f)
+		query := strings.Join(fs.Args(), " ")
+		var hits []index.Hit
+		var err error
+		if *kwOnly {
+			hits, err = d.Keyword(query, f)
+		} else {
+			e := embed.New(embed.Default())
+			m, merr := d.LoadMatrix(e.Model())
+			if merr != nil {
+				die("%v", merr)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			var via string
+			var warn error
+			hits, via, warn = d.Hybrid(ctx, e, m, query, f)
+			if warn != nil {
+				fmt.Fprintln(os.Stderr, "hms: vector pass skipped:", warn)
+			}
+			if m.Missing > 0 {
+				fmt.Fprintf(os.Stderr, "hms: %d chunks have no vector yet (run `hms embed`); %s result\n", m.Missing, via)
+			}
+		}
 		if err != nil {
 			die("%v", err)
 		}
@@ -137,6 +165,47 @@ func main() {
 			}
 			fmt.Printf("%d. [%s %s%s] score %.3f\n   %s\n", i+1, h.Kind, h.Path, sec, h.Score, text)
 		}
+	case "embed":
+		fs := flag.NewFlagSet("embed", flag.ExitOnError)
+		reset := fs.Bool("reset", false, "drop the cached vectors of every model first")
+		fs.Parse(rest)
+		d := open(p)
+		defer d.Close()
+		e := embed.New(embed.Default())
+		ctx := context.Background()
+		hc, cancel := context.WithTimeout(ctx, 60*time.Second)
+		dim, err := e.Health(hc)
+		cancel()
+		if err != nil {
+			die("embedder health check failed: %v\nStart the model server and pull the model (for the default: `ollama pull nomic-embed-text`).", err)
+		}
+		if *reset {
+			n, err := d.DropVectors("")
+			if err != nil {
+				die("%v", err)
+			}
+			fmt.Printf("dropped %d cached vectors\n", n)
+		} else if n, err := d.DropVectors(e.Model()); err == nil && n > 0 {
+			fmt.Printf("dropped %d cached vectors of other models or of texts no longer used\n", n)
+		}
+		missing, total, err := d.Pending(e.Model())
+		if err != nil {
+			die("%v", err)
+		}
+		fmt.Printf("model %s, %d dimensions; %d of %d chunk texts need a vector\n", e.Model(), dim, missing, total)
+		start := time.Now()
+		last := 0
+		n, err := d.EmbedPending(ctx, e, func(done, tot int) {
+			if done-last >= 200 || done == tot {
+				last = done
+				rate := float64(done) / time.Since(start).Seconds()
+				fmt.Printf("%d/%d  %.1f chunks/s  about %s left\n", done, tot, rate, (time.Duration(float64(tot-done)/rate) * time.Second).Round(time.Minute))
+			}
+		})
+		if err != nil {
+			die("embedding stopped after %d chunks (rerun to continue): %v", n, err)
+		}
+		fmt.Printf("embedded %d chunk texts in %s\n", n, time.Since(start).Round(time.Second))
 	case "stats":
 		d := open(p)
 		defer d.Close()
@@ -151,6 +220,9 @@ func main() {
 		sort.Strings(keys)
 		for _, k := range keys {
 			fmt.Printf("%-40s %d\n", k, m[k])
+		}
+		if miss, total, err := d.Pending(embed.Default().Model); err == nil {
+			fmt.Printf("%-40s %d of %d chunk texts have a vector (%s)\n", "vectors", total-miss, total, embed.Default().Model)
 		}
 	case "hash":
 		d := open(p)
