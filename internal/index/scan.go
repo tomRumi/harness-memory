@@ -233,8 +233,8 @@ func gather(repo string) (cands []cand, warns []string, keep []string, err error
 			}
 			root, rerr := resolveRoot(repo, rawRoot)
 			if rerr == nil {
-				if rr, e2 := filepath.EvalSymlinks(repo); e2 == nil && root == rr {
-					rerr = fmt.Errorf("the code root is the memory repository itself")
+				if rr, e2 := filepath.EvalSymlinks(repo); e2 == nil && badRoot(rr, root) {
+					rerr = fmt.Errorf("the code root is the memory repository, contains it, or lies inside wiki/, notes/ or facts/")
 				}
 			}
 			if rerr != nil {
@@ -538,4 +538,22 @@ func isBinary(data []byte) bool {
 // (a file can be found by its name or its directory).
 func metaText(n nodeRow) string {
 	return n.Title + " " + strings.NewReplacer("/", " ", ".", " ", "-", " ").Replace(n.Path)
+}
+
+// badRoot reports whether a code root would index the memory repository's own entries a second time: the root is the
+// repository, contains it, or lies inside wiki/, notes/ or facts/.
+func badRoot(repo, root string) bool {
+	in := func(parent, child string) bool {
+		r, err := filepath.Rel(parent, child)
+		return err == nil && r != ".." && !strings.HasPrefix(r, ".."+string(filepath.Separator))
+	}
+	if in(root, repo) {
+		return true // the root is the repository or one of its parents
+	}
+	for _, layer := range []string{"wiki", "notes", "facts"} {
+		if in(filepath.Join(repo, layer), root) {
+			return true
+		}
+	}
+	return false
 }

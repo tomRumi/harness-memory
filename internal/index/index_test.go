@@ -482,7 +482,7 @@ func TestBrokenLayerLinkAndRepoRootAreRefused(t *testing.T) {
 	os.Remove(filepath.Join(repo, "wiki"))
 	os.Rename(filepath.Join(repo, "wiki-away"), filepath.Join(repo, "wiki"))
 	// "." and the repository path itself are not valid code roots
-	for _, root := range []string{".", repo, "./"} {
+	for _, root := range []string{".", repo, "./", "..", "wiki", filepath.Dir(repo)} {
 		write(t, repo, "projects.yaml", "projects:\n  - name: alpha\n    code_roots: ['"+root+"']\n")
 		if _, err := d.Rescan(repo); err == nil {
 			t.Fatalf("code root %q must be refused", root)
