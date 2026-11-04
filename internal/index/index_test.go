@@ -37,6 +37,10 @@ func fixture(t *testing.T) (repo, code string) {
 	write(t, code, "assets/blob.dat", "head\x00\x01\x02 not text")
 	write(t, code, ".env", "TOK"+"EN_VALUE=should-never-be-indexed-12345\n") // built at run time so the leak gate does not trip on the fixture
 	write(t, code, ".worktrees/copy/src/main.py", "def compute_total(items):\n    return sum(items)\n")
+	write(t, code, "data/rows.jsonl", "{\"row\": \"jsonl_marker_zz\"}\n")
+	write(t, code, "export.csv", "a,b\ncsv_marker_zz,2\n")
+	write(t, code, "big.json", "{\"k\": \""+strings.Repeat("x", 120000)+"\"}")
+	write(t, code, "config.json", "{\"setting\": \"small_json_marker_zz\"}")
 	write(t, code, "keys/server.pem", "-----BEGIN-----\nabc\n")
 	write(t, code, "backups/dump.sql", "INSERT INTO t VALUES (1);\n")
 	return repo, code
@@ -59,11 +63,11 @@ func TestRescanBuildsNodesEdgesAndSkipsJunk(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Added != 7 || res.Changed != 0 || res.Removed != 0 {
+	if res.Added != 8 || res.Changed != 0 || res.Removed != 0 {
 		t.Fatalf("first scan: %+v", res)
 	}
 	st, _ := d.Stats()
-	want := map[string]int{"wiki/alpha": 3, "note/alpha": 2, "fact/global": 1, "code/alpha": 1}
+	want := map[string]int{"wiki/alpha": 3, "note/alpha": 2, "fact/global": 1, "code/alpha": 2}
 	if !reflect.DeepEqual(st, want) {
 		t.Fatalf("stats %v want %v", st, want)
 	}
@@ -116,7 +120,7 @@ func TestIncrementalRescanChangesExactlyTheEditedNode(t *testing.T) {
 	h0, _, _ := d.StateHash()
 
 	res, _ := d.Rescan(repo)
-	if res.Added+res.Changed+res.Removed != 0 || res.Unchanged != 7 {
+	if res.Added+res.Changed+res.Removed != 0 || res.Unchanged != 8 {
 		t.Fatalf("an unchanged tree must change nothing: %+v", res)
 	}
 	write(t, repo, "wiki/alpha/setup.md", "# Setup\n\n## Steps\nCreate the frobnicator directory first, then restart.\n")
@@ -213,10 +217,10 @@ func TestCodeLayerNeverIndexesHiddenBinarySecretOrIgnoredFiles(t *testing.T) {
 		got = append(got, p)
 	}
 	rows.Close()
-	if !reflect.DeepEqual(got, []string{"src/main.py"}) {
-		t.Fatalf("code layer must hold only src/main.py, got %v", got)
+	if !reflect.DeepEqual(got, []string{"config.json", "src/main.py"}) {
+		t.Fatalf("code layer must hold only config.json and src/main.py, got %v", got)
 	}
-	for _, q := range []string{"should-never-be-indexed-12345", "TOKEN_VALUE", "BEGIN", "INSERT"} {
+	for _, q := range []string{"should-never-be-indexed-12345", "TOKEN_VALUE", "BEGIN", "INSERT", "jsonl_marker_zz", "csv_marker_zz"} {
 		if hits, _ := d.Keyword(q, Filter{}); len(hits) != 0 {
 			t.Fatalf("%q reached the index: %+v", q, hits)
 		}

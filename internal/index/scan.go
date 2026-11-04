@@ -84,6 +84,13 @@ var (
 // indexed can be returned to an agent.
 var secretSuffix = map[string]bool{".pem": true, ".key": true, ".p12": true, ".pfx": true, ".kdbx": true, ".jks": true, ".keystore": true}
 
+// dataSuffix names tabular and record formats. They are data, not code: a recall for a function name would
+// only ever hit rows of them, and they make up most of the chunks of a working tree.
+var dataSuffix = map[string]bool{".jsonl": true, ".ndjson": true, ".csv": true, ".tsv": true, ".snap": true, ".parquet": true}
+
+// maxJSONBytes is the size above which a .json file is treated as data rather than configuration.
+const maxJSONBytes = 100_000
+
 func skipCode(rel string, ignore map[string]bool) bool {
 	parts := strings.Split(rel, "/")
 	for _, p := range parts {
@@ -104,7 +111,7 @@ func skipCode(rel string, ignore map[string]bool) bool {
 	if skipBase[base] || strings.HasSuffix(low, ".min.js") || strings.HasSuffix(low, ".min.css") {
 		return true
 	}
-	if skipSuffix[strings.ToLower(filepath.Ext(base))] {
+	if skipSuffix[strings.ToLower(filepath.Ext(base))] || dataSuffix[strings.ToLower(filepath.Ext(base))] {
 		return true
 	}
 	lr := strings.ToLower(rel)
@@ -174,6 +181,9 @@ func collect(repo string) (map[string]parsed, []string, error) {
 				}
 				raw, err := os.ReadFile(path)
 				if err != nil || isBinary(raw) {
+					return nil
+				}
+				if strings.HasSuffix(strings.ToLower(rel), ".json") && len(raw) > maxJSONBytes {
 					return nil
 				}
 				pieces := chunk.Code(string(raw))
