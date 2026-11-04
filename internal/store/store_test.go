@@ -477,8 +477,13 @@ func TestCommitterRetriesAfterAFailure(t *testing.T) {
 	if st.Commit.LastErr() == nil || st.Commit.Commits() != 0 {
 		t.Fatalf("expected a refusal first: %d %v", st.Commit.Commits(), st.Commit.LastErr())
 	}
-	exec.Command("git", "-C", repo, "rm", "--cached", "-q", "-f", "owner.txt").Run()
-	deadline := time.Now().Add(5 * time.Second)
+	for i := 0; i < 50; i++ { // the committer may hold git's index lock for a moment; retry until the unstage works
+		if exec.Command("git", "-C", repo, "rm", "--cached", "-q", "-f", "owner.txt").Run() == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	deadline := time.Now().Add(10 * time.Second)
 	for st.Commit.Commits() == 0 && time.Now().Before(deadline) {
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -491,5 +496,22 @@ func TestNoGitDirectoryIsReportedNotOk(t *testing.T) {
 	c := NewCommitter(t.TempDir(), time.Millisecond)
 	if _, _, _, enabled := c.Status(); enabled {
 		t.Fatal("a directory without .git must report commits as off")
+	}
+}
+
+func TestAFileChangedAfterACommitIsCommittedAgain(t *testing.T) {
+	_, _, repo := newStore(t)
+	c := NewCommitter(repo, time.Hour)
+	f := filepath.Join(repo, "notes", "w", "a.md")
+	os.MkdirAll(filepath.Dir(f), 0o755)
+	os.WriteFile(f, []byte("one\n"), 0o644)
+	c.Notify("notes/w/a.md")
+	c.Flush()
+	os.WriteFile(f, []byte("two\n"), 0o644)
+	c.Notify("notes/w/a.md")
+	c.Flush()
+	out, _ := exec.Command("git", "-C", repo, "status", "--porcelain").CombinedOutput()
+	if strings.TrimSpace(string(out)) != "" || c.Commits() != 2 {
+		t.Fatalf("commits %d, status %q", c.Commits(), out)
 	}
 }

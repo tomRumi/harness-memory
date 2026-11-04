@@ -19,9 +19,10 @@ import (
 type Committer struct {
 	repo    string
 	quiet   time.Duration
-	mu      sync.Mutex // guards the fields below; never held while git runs
-	runMu   sync.Mutex // one flush at a time
-	paths   map[string]bool
+	mu      sync.Mutex       // guards the fields below; never held while git runs
+	runMu   sync.Mutex       // one flush at a time
+	paths   map[string]int64 // path -> number of the last Notify that named it
+	seq     int64
 	timer   *time.Timer
 	backoff time.Duration
 	commits int
@@ -31,7 +32,7 @@ type Committer struct {
 
 func NewCommitter(repo string, quiet time.Duration) *Committer {
 	_, err := os.Stat(filepath.Join(repo, ".git"))
-	return &Committer{repo: repo, quiet: quiet, paths: map[string]bool{}, off: err != nil}
+	return &Committer{repo: repo, quiet: quiet, paths: map[string]int64{}, off: err != nil}
 }
 
 // Status reports the state for the health check.
@@ -52,7 +53,8 @@ func (c *Committer) Notify(rels ...string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, r := range rels {
-		c.paths[filepath.ToSlash(r)] = true
+		c.seq++
+		c.paths[filepath.ToSlash(r)] = c.seq
 	}
 	if c.off {
 		return
@@ -125,8 +127,10 @@ func (c *Committer) Flush() {
 		return
 	}
 	snap := make([]string, 0, len(c.paths))
-	for p := range c.paths {
+	seen := make(map[string]int64, len(c.paths))
+	for p, n := range c.paths {
 		snap = append(snap, p)
+		seen[p] = n
 	}
 	c.mu.Unlock()
 	sort.Strings(snap)
@@ -140,7 +144,9 @@ func (c *Committer) Flush() {
 		return
 	}
 	for _, p := range snap {
-		delete(c.paths, p) // paths notified while git ran stay for the next round
+		if c.paths[p] == seen[p] {
+			delete(c.paths, p) // a path changed again while git ran keeps its newer number and goes in the next round
+		}
 	}
 	c.backoff, c.lastErr = 0, nil
 	if len(c.paths) > 0 {
