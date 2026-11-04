@@ -250,18 +250,20 @@ func TestOneHopAddsLinkedEntriesInReservedPlacesOnly(t *testing.T) {
 
 func TestBestKeywordHitsKeepAPlace(t *testing.T) {
 	repo, _ := fixture(t)
-	// one entry matches the identifier exactly; many others are close in meaning to the query words but lack the identifier
-	write(t, repo, "wiki/alpha/exact.md", "# Exact\n\nThe quux_handler_7 function drops stale rows.\n")
-	for i := 0; i < 8; i++ {
+	// The exact entry holds the identifier and little else. Ten others repeat the query's ordinary words, so they are
+	// closer to the query in meaning and also match its words; only the exact entry matches the rare identifier.
+	write(t, repo, "wiki/alpha/exact.md", "# Exact\n\nquux_handler_7 is a thing.\n")
+	for i := 0; i < 10; i++ {
 		write(t, repo, filepath.Join("wiki/alpha", "near"+string(rune('a'+i))+".md"),
-			"# Near\n\nA handler function that drops stale rows and old rows, handler handler function function rows.\n")
+			"# Near\n\nhandler function drops stale rows. handler function drops stale rows. handler function drops stale rows.\n")
 	}
 	d := openDB(t)
 	d.Rescan(repo)
 	e := &bagEmbedder{model: "bag"}
 	d.EmbedPending(context.Background(), e, nil)
 	m, _ := d.LoadMatrix("bag")
-	hits, _, _ := d.Hybrid(context.Background(), e, m, "quux_handler_7 handler function drops stale rows", Filter{Limit: 3, Kinds: []string{"wiki"}})
+	q := "quux_handler_7 handler function drops stale rows handler function drops stale rows"
+	hits, _, _ := d.Hybrid(context.Background(), e, m, q, Filter{Limit: 3, Kinds: []string{"wiki"}})
 	found := false
 	for _, h := range hits {
 		found = found || h.NodeID == "wiki/alpha/exact"
