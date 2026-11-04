@@ -1,0 +1,7 @@
+.leak-denylist
+*.db
+*.db-shm
+*.db-wal
+/bin/
+/dist/
+.DS_Store
