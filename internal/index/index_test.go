@@ -447,3 +447,45 @@ func TestUnchangedFilesAreNotChunkedAgain(t *testing.T) {
 		t.Fatalf("expected one parse, got %d", parseCalls.Load())
 	}
 }
+
+func TestKeyBlockInMarkdownIsNotIndexed(t *testing.T) {
+	repo, _ := fixture(t)
+	write(t, repo, "wiki/alpha/keys.md", "# Keys\n\n-----BEGIN PGP PRIVATE"+" KEY BLOCK-----\nmd_key_body_marker\n")
+	d := openDB(t)
+	res, _ := d.Rescan(repo)
+	if hits, _ := d.Keyword("md_key_body_marker", Filter{}); len(hits) != 0 {
+		t.Fatalf("a key block in markdown was indexed: %+v", hits)
+	}
+	found := false
+	for _, w := range res.Warnings {
+		found = found || strings.Contains(w, "wiki/alpha/keys") && strings.Contains(w, "private key block")
+	}
+	if !found {
+		t.Fatalf("no warning: %v", res.Warnings)
+	}
+}
+
+func TestBrokenLayerLinkAndRepoRootAreRefused(t *testing.T) {
+	repo, _ := fixture(t)
+	d := openDB(t)
+	d.Rescan(repo)
+	before, _ := d.Stats()
+	// wiki/ becomes a link to a volume that is not there
+	os.Rename(filepath.Join(repo, "wiki"), filepath.Join(repo, "wiki-away"))
+	os.Symlink(filepath.Join(t.TempDir(), "not-mounted"), filepath.Join(repo, "wiki"))
+	if _, err := d.Rescan(repo); err == nil {
+		t.Fatal("a broken wiki/ link must be an error")
+	}
+	if after, _ := d.Stats(); !reflect.DeepEqual(before, after) {
+		t.Fatalf("a refused rescan changed the index: %v -> %v", before, after)
+	}
+	os.Remove(filepath.Join(repo, "wiki"))
+	os.Rename(filepath.Join(repo, "wiki-away"), filepath.Join(repo, "wiki"))
+	// "." and the repository path itself are not valid code roots
+	for _, root := range []string{".", repo, "./"} {
+		write(t, repo, "projects.yaml", "projects:\n  - name: alpha\n    code_roots: ['"+root+"']\n")
+		if _, err := d.Rescan(repo); err == nil {
+			t.Fatalf("code root %q must be refused", root)
+		}
+	}
+}

@@ -10,12 +10,12 @@ cd "$root" || exit 1
 fail=0
 report() { printf 'leak gate: %s\n' "$1" >&2; fail=1; }
 
-# --text: a binary file is scanned as text, not summarised as "Binary files differ". tr turns NUL bytes into line breaks
-# (awk would cut a line at the first NUL). T is a type change (a symlink replaced by a file). No textconv or external diff driver runs.
+# --text: a binary file is scanned as text, not summarised as "Binary files differ". tr turns NUL bytes into spaces
+# (awk would cut a line at the first NUL, and the text after it would lose its leading plus sign). T is a type change (a symlink replaced by a file). No textconv or external diff driver runs.
 # awk skips the per-file header lines (everything between "diff --git" and the first "@@"), so a content line that
 # itself starts with "++" is still checked.
-added=$(git diff --cached -U0 --no-color --no-textconv --no-ext-diff --text --diff-filter=ACMRT | tr '\000' '\n' | awk '/^diff --git /{hdr=1; next} /^@@/{hdr=0; next} hdr{next} /^\+/{print substr($0,2)}' || true)
-names=$(git diff --cached --name-only --diff-filter=ACMRT || true)
+added=$(git diff --cached -U0 --no-color --no-textconv --no-ext-diff --text --diff-filter=ACMRT | tr '\000' ' ' | awk '/^diff --git /{hdr=1; next} /^@@/{hdr=0; next} hdr{next} /^\+/{print substr($0,2)}' || true)
+names=$(git -c core.quotePath=false diff --cached --name-only --diff-filter=ACMRT || true)
 
 check_shape() { # label, extended regex, text
   # Report the rule and the line number only: the matched text may itself be the secret.

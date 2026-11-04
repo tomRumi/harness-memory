@@ -170,7 +170,11 @@ func resolveRoot(repo, root string) (string, error) {
 func gather(repo string) (cands []cand, warns []string, keep []string, err error) {
 	for _, kind := range []string{"wiki", "notes", "facts"} {
 		root := filepath.Join(repo, kind)
-		if r, rerr := filepath.EvalSymlinks(root); rerr == nil { // wiki/, notes/ or facts/ may be a link
+		if fi, lerr := os.Lstat(root); lerr == nil && fi.Mode()&os.ModeSymlink != 0 { // wiki/, notes/ or facts/ may be a link
+			r, rerr := filepath.EvalSymlinks(root)
+			if rerr != nil {
+				return nil, nil, nil, fmt.Errorf("%s is a link that does not lead anywhere (is a shared volume not mounted?): refusing to rescan, nothing was removed", kind)
+			}
 			root = r
 		}
 		werr := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
@@ -228,6 +232,11 @@ func gather(repo string) (cands []cand, warns []string, keep []string, err error
 				return nil, nil, nil, fmt.Errorf("project %s: an empty code root would be the memory repository itself", pr.Name)
 			}
 			root, rerr := resolveRoot(repo, rawRoot)
+			if rerr == nil {
+				if rr, e2 := filepath.EvalSymlinks(repo); e2 == nil && root == rr {
+					rerr = fmt.Errorf("the code root is the memory repository itself")
+				}
+			}
 			if rerr != nil {
 				return nil, nil, nil, fmt.Errorf("project %s: code root %q: %w (refusing to rescan: that would remove the project's code entries)", pr.Name, rawRoot, rerr)
 			}
@@ -284,6 +293,9 @@ var credAssignRe = regexp.MustCompile(`(?i)(password|passwd|secret|token|api_?ke
 // hash has not changed is never chunked. ok is false for a binary file, an oversized or empty one, or one that
 // holds a private key block.
 func (c cand) prepare(raw []byte) (hash, warn string, ok bool) {
+	if keyBlockRe.Match(raw) { // in any file, markdown included: what is indexed can be returned to an agent
+		return "", c.id + ": holds a private key block, not indexed", false
+	}
 	if c.kind != "code" {
 		return sum(raw), "", true
 	}
@@ -292,9 +304,6 @@ func (c cand) prepare(raw []byte) (hash, warn string, ok bool) {
 	}
 	if strings.HasSuffix(strings.ToLower(c.rel), ".json") && len(raw) > maxJSONBytes {
 		return "", "", false
-	}
-	if keyBlockRe.Match(raw) {
-		return "", c.id + ": holds a private key block, not indexed", false
 	}
 	if credAssignRe.Match(raw) {
 		warn = c.id + ": credential-like text (indexed; review the file)"
