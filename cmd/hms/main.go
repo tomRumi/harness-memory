@@ -24,7 +24,7 @@ usage: hms [--home DIR] [--repo DIR] [--db FILE] <command> [arguments]
   init                         create the memory repository and the index
   rescan                       make the index match the files (changed files only)
   embed [-reset]               embed every chunk that has no vector yet (wiki first, code last); safe to stop and rerun
-  recall [-p P] [-k K,K] [-n N] [-keyword] [-json] <words...>
+  recall [-p P] [-k K,K] [-n N] [-keyword] [-hop] [-json] <words...>
                                hybrid recall (vectors + keywords) over active nodes; -keyword skips the vectors
   stats                        node counts by kind and project
   hash                         digest of everything derived from files
@@ -106,6 +106,7 @@ func main() {
 		n := fs.Int("n", 5, "number of hits")
 		asJSON := fs.Bool("json", false, "print hits as JSON, with the full text")
 		kwOnly := fs.Bool("keyword", false, "keyword pass only")
+		hop := fs.Bool("hop", false, "reserve places for entries that the top hits link to (needs vectors)")
 		fs.Parse(rest)
 		d := open(p)
 		defer d.Close()
@@ -128,7 +129,7 @@ func main() {
 			defer cancel()
 			var via string
 			var warn error
-			hits, via, warn = d.Hybrid(ctx, e, m, query, f)
+			hits, via, warn = d.HybridOpts(ctx, e, m, query, f, *hop)
 			if warn != nil {
 				fmt.Fprintln(os.Stderr, "hms: vector pass skipped:", warn)
 			}

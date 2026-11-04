@@ -23,6 +23,9 @@ const (
 	WeightVec   = 1.0  // weight of the vector pass
 	WeightKw    = 1.0  // weight of the keyword pass
 	Candidates  = 50   // chunks taken from each pass before fusion
+	HopSeeds    = 3    // the top hits whose links are followed
+	HopSlots    = 2    // result places reserved for linked entries
+	HopLinks    = 8    // links followed per seed
 	embedBatch  = 8
 	embedWorker = 3
 )
@@ -189,12 +192,13 @@ type Matrix struct {
 	Kind    []string
 	Project []string
 	vecs    []float32
-	Missing int // active chunks that have no vector yet
+	row     map[int64]int // chunk id -> row
+	Missing int           // active chunks that have no vector yet
 }
 
 // LoadMatrix reads every vector of model for active chunks. It fails if the cache mixes dimensions.
 func (d *DB) LoadMatrix(model string) (*Matrix, error) {
-	m := &Matrix{}
+	m := &Matrix{row: map[int64]int{}}
 	rows, err := d.Query(`SELECT c.id, n.kind, n.project, v.dim, v.vec FROM chunks c JOIN nodes n ON n.id=c.node_id
 		JOIN vec.vectors v ON v.text_hash=c.text_hash AND v.model=? WHERE n.status='active' ORDER BY c.id`, model)
 	if err != nil {
@@ -215,6 +219,7 @@ func (d *DB) LoadMatrix(model string) (*Matrix, error) {
 		if dim != m.Dim || len(blob) != 4*dim {
 			return nil, fmt.Errorf("vector cache for %s mixes dimensions (%d and %d); run `hms embed --reset`", model, m.Dim, dim)
 		}
+		m.row[id] = len(m.IDs)
 		m.IDs = append(m.IDs, id)
 		m.Kind = append(m.Kind, kind)
 		m.Project = append(m.Project, proj)
@@ -229,6 +234,19 @@ func (d *DB) LoadMatrix(model string) (*Matrix, error) {
 	}
 	m.Missing = active - len(m.IDs)
 	return m, nil
+}
+
+// Dot returns the dot product of q with the vector of a chunk, and false if the chunk has no vector in the matrix.
+func (m *Matrix) Dot(q []float32, chunkID int64) (float32, bool) {
+	i, ok := m.row[chunkID]
+	if !ok || len(q) != m.Dim {
+		return 0, false
+	}
+	var s float32
+	for j, x := range m.vecs[i*m.Dim : (i+1)*m.Dim] {
+		s += x * q[j]
+	}
+	return s, true
 }
 
 type scored struct {
