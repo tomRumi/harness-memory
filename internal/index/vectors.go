@@ -49,17 +49,22 @@ func bytesf32(b []byte) []float32 {
 
 type pending struct{ hash, text string }
 
+// vectorKinds are the kinds of node that get vectors (settings v3). Code is left to the keyword pass: identifiers are
+// lexical, a general text model embeds source code poorly, and code is 80% of the chunks, so leaving it out cuts the
+// embedding work to a fifth. Measured on the development sets: vectors never won on code and lost two questions.
+const vectorKinds = `('wiki','note','fact')`
+
 // layerOrder puts the layers people ask about first: wiki, then notes and facts, then code.
 const layerOrder = `CASE n.kind WHEN 'wiki' THEN 0 WHEN 'code' THEN 2 ELSE 1 END`
 
 // Pending counts the distinct chunk texts that have no vector for model yet, and the distinct texts in all.
 func (d *DB) Pending(model string) (missing, total int, err error) {
-	err = d.QueryRow(`SELECT count(DISTINCT text_hash) FROM chunks`).Scan(&total)
+	err = d.QueryRow(`SELECT count(DISTINCT c.text_hash) FROM chunks c JOIN nodes n ON n.id=c.node_id WHERE n.kind IN ` + vectorKinds).Scan(&total)
 	if err != nil {
 		return
 	}
-	err = d.QueryRow(`SELECT count(DISTINCT c.text_hash) FROM chunks c
-		WHERE NOT EXISTS (SELECT 1 FROM vec.vectors v WHERE v.text_hash=c.text_hash AND v.model=?)`, model).Scan(&missing)
+	err = d.QueryRow(`SELECT count(DISTINCT c.text_hash) FROM chunks c JOIN nodes n ON n.id=c.node_id
+		WHERE n.kind IN `+vectorKinds+` AND NOT EXISTS (SELECT 1 FROM vec.vectors v WHERE v.text_hash=c.text_hash AND v.model=?)`, model).Scan(&missing)
 	return
 }
 
@@ -68,7 +73,7 @@ func (d *DB) Pending(model string) (missing, total int, err error) {
 func (d *DB) EmbedPending(ctx context.Context, e Embedder, progress func(done, total int)) (int, error) {
 	model := e.Model()
 	rows, err := d.Query(`SELECT c.text_hash, c.text, `+layerOrder+` AS pri FROM chunks c JOIN nodes n ON n.id=c.node_id
-		WHERE NOT EXISTS (SELECT 1 FROM vec.vectors v WHERE v.text_hash=c.text_hash AND v.model=?)
+		WHERE n.kind IN `+vectorKinds+` AND NOT EXISTS (SELECT 1 FROM vec.vectors v WHERE v.text_hash=c.text_hash AND v.model=?)
 		ORDER BY pri, c.id`, model)
 	if err != nil {
 		return 0, err
@@ -176,9 +181,10 @@ func (d *DB) EmbedPending(ctx context.Context, e Embedder, progress func(done, t
 }
 
 // DropVectors removes the cached vectors of every model except keep (use "" to remove them all), and the vectors of
-// texts no chunk uses any more. It returns how many were removed.
+// texts that no wiki, note or fact chunk uses any more (including every code vector). It returns how many were removed.
 func (d *DB) DropVectors(keep string) (int, error) {
-	res, err := d.Exec(`DELETE FROM vec.vectors WHERE model <> ? OR text_hash NOT IN (SELECT text_hash FROM chunks)`, keep)
+	res, err := d.Exec(`DELETE FROM vec.vectors WHERE model <> ? OR text_hash NOT IN
+		(SELECT c.text_hash FROM chunks c JOIN nodes n ON n.id=c.node_id WHERE n.kind IN `+vectorKinds+`)`, keep)
 	if err != nil {
 		return 0, err
 	}
@@ -194,14 +200,14 @@ type Matrix struct {
 	Project []string
 	vecs    []float32
 	row     map[int64]int // chunk id -> row
-	Missing int           // active chunks that have no vector yet
+	Missing int           // active wiki, note and fact chunks that have no vector yet
 }
 
 // LoadMatrix reads every vector of model for active chunks. It fails if the cache mixes dimensions.
 func (d *DB) LoadMatrix(model string) (*Matrix, error) {
 	m := &Matrix{row: map[int64]int{}}
 	rows, err := d.Query(`SELECT c.id, n.kind, n.project, v.dim, v.vec FROM chunks c JOIN nodes n ON n.id=c.node_id
-		JOIN vec.vectors v ON v.text_hash=c.text_hash AND v.model=? WHERE n.status='active' ORDER BY c.id`, model)
+		JOIN vec.vectors v ON v.text_hash=c.text_hash AND v.model=? WHERE n.status='active' AND n.kind IN `+vectorKinds+` ORDER BY c.id`, model)
 	if err != nil {
 		return nil, err
 	}
@@ -230,7 +236,7 @@ func (d *DB) LoadMatrix(model string) (*Matrix, error) {
 		return nil, err
 	}
 	var active int
-	if err := d.QueryRow(`SELECT count(*) FROM chunks c JOIN nodes n ON n.id=c.node_id WHERE n.status='active'`).Scan(&active); err != nil {
+	if err := d.QueryRow(`SELECT count(*) FROM chunks c JOIN nodes n ON n.id=c.node_id WHERE n.status='active' AND n.kind IN ` + vectorKinds).Scan(&active); err != nil {
 		return nil, err
 	}
 	m.Missing = active - len(m.IDs)
