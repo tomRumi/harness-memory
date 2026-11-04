@@ -5,12 +5,15 @@ package embed
 import (
 	"bytes"
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"math"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"time"
 )
@@ -58,7 +61,18 @@ type Client struct {
 
 func New(cfg Config) *Client { return &Client{cfg: cfg, http: &http.Client{Timeout: 5 * time.Minute}} }
 
+// Model is the model name, for display.
 func (c *Client) Model() string { return c.cfg.Model }
+
+// ID names what a stored vector depends on: the model and the prefix put before a stored chunk. Vectors of two
+// different IDs are never mixed; changing the prefix of a model is a different ID, so its vectors are made again.
+func (c *Client) ID() string {
+	if c.cfg.DocPrefix == "" {
+		return c.cfg.Model
+	}
+	h := sha1.Sum([]byte(c.cfg.DocPrefix))
+	return c.cfg.Model + "#" + hex.EncodeToString(h[:3])
+}
 
 // Docs embeds stored chunks. The vectors are unit length.
 func (c *Client) Docs(ctx context.Context, texts []string) ([][]float32, error) {
@@ -133,12 +147,14 @@ func (c *Client) call(ctx context.Context, input []string) ([][]float32, error) 
 	} else {
 		var r struct {
 			Data []struct {
+				Index     int       `json:"index"`
 				Embedding []float32 `json:"embedding"`
 			} `json:"data"`
 		}
 		if err := json.Unmarshal(raw, &r); err != nil {
 			return nil, fmt.Errorf("embedder answer: %w", err)
 		}
+		sort.SliceStable(r.Data, func(i, j int) bool { return r.Data[i].Index < r.Data[j].Index }) // the order of the request
 		for _, d := range r.Data {
 			out = append(out, d.Embedding)
 		}

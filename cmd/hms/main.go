@@ -30,11 +30,11 @@ usage: hms [--home DIR] [--repo DIR] [--db FILE] <command> [arguments]
 
   init                         create the memory repository and the index
   rescan                       make the index match the files (changed files only)
-  embed [-reset]               embed every chunk that has no vector yet (wiki first, code last); safe to stop and rerun
-  recall [-p P] [-k K,K] [-n N] [-keyword] [-json] <words...>
-                               hybrid recall (vectors + keywords) over active nodes; -keyword skips the vectors
+  embed [-reset] [-prune]      embed every wiki, note and fact chunk that has no vector yet; safe to stop and rerun
+  recall [-p P] [-k K,K] [-n N] [-vectors] [-json] <words...>
+                               keyword recall over active nodes; -vectors (or HMS_VECTORS=1) adds the vector pass
   bench <questions.json> ...   recall latency over the questions' texts (query vector cached, then with embedding)
-  serve [-addr A] [-no-embed]  MCP over HTTP (loopback only) with seven tools: recall learn wiki_read fact_add retire feedback stats
+  serve [-addr A] [-vectors]  MCP over HTTP (loopback only) with seven tools: recall learn wiki_read fact_add retire feedback stats
   stats                        node counts by kind and project
   hash                         digest of everything derived from files
   digests                      one digest per node, as JSON
@@ -114,7 +114,7 @@ func main() {
 		kinds := fs.String("k", "", "kinds, comma separated: wiki,code,note,fact")
 		n := fs.Int("n", 5, "number of hits")
 		asJSON := fs.Bool("json", false, "print hits as JSON, with the full text")
-		kwOnly := fs.Bool("keyword", false, "keyword pass only")
+		withVec := fs.Bool("vectors", os.Getenv("HMS_VECTORS") == "1", "add the vector pass (needs `hms embed` and a running model server); also HMS_VECTORS=1")
 		fs.Parse(rest)
 		d := open(p)
 		defer d.Close()
@@ -125,11 +125,11 @@ func main() {
 		query := strings.Join(fs.Args(), " ")
 		var hits []index.Hit
 		var err error
-		if *kwOnly {
+		if !*withVec {
 			hits, err = d.Keyword(query, f)
 		} else {
 			e := embed.New(embed.Default())
-			m, merr := d.LoadMatrix(e.Model())
+			m, merr := d.LoadMatrix(e.ID())
 			if merr != nil {
 				die("%v", merr)
 			}
@@ -152,10 +152,15 @@ func main() {
 			type jh struct {
 				Node, Kind, Project, Path, Section, Text string
 				Score                                    float64
+				ScoreKind                                string // "bm25" (lower is better) or "rrf" (higher is better)
+			}
+			scoreKind := "bm25"
+			if *withVec {
+				scoreKind = "rrf"
 			}
 			out := make([]jh, 0, len(hits))
 			for _, h := range hits {
-				out = append(out, jh{h.NodeID, h.Kind, h.Project, h.Path, h.Section, h.Text, h.Score})
+				out = append(out, jh{h.NodeID, h.Kind, h.Project, h.Path, h.Section, h.Text, h.Score, scoreKind})
 			}
 			json.NewEncoder(os.Stdout).Encode(out)
 			return
@@ -177,6 +182,7 @@ func main() {
 	case "embed":
 		fs := flag.NewFlagSet("embed", flag.ExitOnError)
 		reset := fs.Bool("reset", false, "drop the cached vectors of every model first")
+		prune := fs.Bool("prune", false, "also drop cached vectors of other models and of texts no longer used")
 		fs.Parse(rest)
 		d := open(p)
 		defer d.Close()
@@ -194,10 +200,14 @@ func main() {
 				die("%v", err)
 			}
 			fmt.Printf("dropped %d cached vectors\n", n)
-		} else if n, err := d.DropVectors(e.Model()); err == nil && n > 0 {
+		} else if *prune {
+			n, err := d.DropVectors(e.ID())
+			if err != nil {
+				die("%v", err)
+			}
 			fmt.Printf("dropped %d cached vectors of other models or of texts no longer used\n", n)
 		}
-		missing, total, err := d.Pending(e.Model())
+		missing, total, err := d.Pending(e.ID())
 		if err != nil {
 			die("%v", err)
 		}
@@ -239,7 +249,7 @@ func main() {
 		defer d.Close()
 		e := embed.New(embed.Default())
 		loadStart := time.Now()
-		m, err := d.LoadMatrix(e.Model())
+		m, err := d.LoadMatrix(e.ID())
 		if err != nil {
 			die("%v", err)
 		}
@@ -272,14 +282,18 @@ func main() {
 			nodes += n
 		}
 		fmt.Printf("machine: %s/%s, %d CPUs, %s\n", runtime.GOOS, runtime.GOARCH, runtime.NumCPU(), runtime.Version())
-		fmt.Printf("corpus: %d nodes, %d vectors of %d dimensions (wiki, note, fact), %d queries (%d distinct)\n", nodes, len(m.IDs), m.Dim, len(warm), len(queries))
+		distinct := map[string]bool{}
+		for _, q := range queries {
+			distinct[q] = true
+		}
+		fmt.Printf("corpus: %d nodes, %d vectors of %d dimensions (wiki, note, fact), %d queries (%d distinct)\n", nodes, len(m.IDs), m.Dim, len(warm), len(distinct))
 		fmt.Printf("vector matrix load (once per process): %s\n", loaded.Round(time.Millisecond))
 		fmt.Printf("recall without embedding (cached query vector): p50 %s  p95 %s  max %s\n", pct(warm, .5).Round(time.Microsecond), pct(warm, .95).Round(time.Microsecond), pct(warm, 1).Round(time.Microsecond))
 		fmt.Printf("recall with embedding of the query:             p50 %s  p95 %s  max %s\n", pct(cold, .5).Round(time.Millisecond), pct(cold, .95).Round(time.Millisecond), pct(cold, 1).Round(time.Millisecond))
 	case "serve":
 		fs := flag.NewFlagSet("serve", flag.ExitOnError)
 		addr := fs.String("addr", "127.0.0.1:8765", "listen address; must be a loopback address")
-		noEmbed := fs.Bool("no-embed", false, "run without an embedder (keyword match only; writes skip vectors)")
+		withVec := fs.Bool("vectors", os.Getenv("HMS_VECTORS") == "1", "use the embedder: vector pass in recall, vectors for new notes (default off: keyword match only)")
 		fs.Parse(rest)
 		host, _, err := net.SplitHostPort(*addr)
 		if err != nil {
@@ -291,7 +305,7 @@ func main() {
 		d := open(p)
 		defer d.Close()
 		var emb *embed.Client
-		if !*noEmbed {
+		if *withVec {
 			emb = embed.New(embed.Default())
 			hc, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			if _, err := emb.Health(hc); err != nil {
@@ -340,7 +354,7 @@ func main() {
 		for _, k := range keys {
 			fmt.Printf("%-40s %d\n", k, m[k])
 		}
-		if miss, total, err := d.Pending(embed.Default().Model); err == nil {
+		if miss, total, err := d.Pending(embed.New(embed.Default()).ID()); err == nil {
 			fmt.Printf("%-40s %d of %d chunk texts have a vector (%s)\n", "vectors", total-miss, total, embed.Default().Model)
 		}
 	case "hash":
@@ -407,6 +421,7 @@ type cachedEmbedder struct {
 }
 
 func (c *cachedEmbedder) Model() string { return c.inner.Model() }
+func (c *cachedEmbedder) ID() string    { return c.inner.ID() }
 func (c *cachedEmbedder) Docs(ctx context.Context, t []string) ([][]float32, error) {
 	return c.inner.Docs(ctx, t)
 }

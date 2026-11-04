@@ -46,6 +46,7 @@ func (b *bag) vec(text string) []float32 {
 	return v
 }
 func (b *bag) Model() string { return "bag" }
+func (b *bag) ID() string    { return "bag" }
 func (b *bag) Docs(ctx context.Context, t []string) ([][]float32, error) {
 	if b.down {
 		return nil, fmt.Errorf("embedder down")

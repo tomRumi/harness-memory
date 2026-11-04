@@ -45,6 +45,7 @@ func (b *bag) vec(text string) []float32 {
 	return v
 }
 func (b *bag) Model() string { return "bag" }
+func (b *bag) ID() string    { return "bag" }
 func (b *bag) Docs(ctx context.Context, t []string) ([][]float32, error) {
 	if b.fail.Load() {
 		return nil, errors.New("embedder down")
@@ -356,7 +357,7 @@ func TestCommitterNeverSweepsInTheOwnersStagedWork(t *testing.T) {
 	if !strings.Contains(string(out), "README.md") {
 		t.Fatal("the owner's staged file was disturbed")
 	}
-	exec.Command("git", "-C", repo, "reset", "-q", "README.md").Run()
+	exec.Command("git", "-C", repo, "rm", "--cached", "-q", "-f", "README.md").Run() // works before the first commit, unlike reset
 	os.Remove(filepath.Join(repo, "README.md"))
 	st.Commit.Flush()
 	if st.Commit.Commits != 1 {

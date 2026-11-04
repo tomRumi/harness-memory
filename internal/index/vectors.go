@@ -11,7 +11,8 @@ import (
 
 // Embedder turns text into unit-length vectors. internal/embed.Client is the implementation.
 type Embedder interface {
-	Model() string
+	Model() string // for display
+	ID() string    // the key of stored vectors: model and document prefix
 	Docs(ctx context.Context, texts []string) ([][]float32, error)
 	Query(ctx context.Context, text string) ([]float32, error)
 }
@@ -56,21 +57,21 @@ const layerOrder = `CASE n.kind WHEN 'wiki' THEN 0 WHEN 'code' THEN 2 ELSE 1 END
 
 // Pending counts the distinct chunk texts that have no vector for model yet, and the distinct texts in all.
 func (d *DB) Pending(model string) (missing, total int, err error) {
-	err = d.QueryRow(`SELECT count(DISTINCT c.text_hash) FROM chunks c JOIN nodes n ON n.id=c.node_id WHERE n.kind IN ` + vectorKinds).Scan(&total)
+	err = d.QueryRow(`SELECT count(DISTINCT c.text_hash) FROM chunks c JOIN nodes n ON n.id=c.node_id WHERE n.status='active' AND n.kind IN ` + vectorKinds).Scan(&total)
 	if err != nil {
 		return
 	}
 	err = d.QueryRow(`SELECT count(DISTINCT c.text_hash) FROM chunks c JOIN nodes n ON n.id=c.node_id
-		WHERE n.kind IN `+vectorKinds+` AND NOT EXISTS (SELECT 1 FROM vec.vectors v WHERE v.text_hash=c.text_hash AND v.model=?)`, model).Scan(&missing)
+		WHERE n.status='active' AND n.kind IN `+vectorKinds+` AND NOT EXISTS (SELECT 1 FROM vec.vectors v WHERE v.text_hash=c.text_hash AND v.model=?)`, model).Scan(&missing)
 	return
 }
 
 // EmbedPending embeds every chunk text that has no vector for the embedder's model, wiki first and code last.
 // It is safe to stop and run again: each batch is stored as soon as it arrives. progress may be nil.
 func (d *DB) EmbedPending(ctx context.Context, e Embedder, progress func(done, total int)) (int, error) {
-	model := e.Model()
+	model := e.ID()
 	rows, err := d.Query(`SELECT c.text_hash, c.text, `+layerOrder+` AS pri FROM chunks c JOIN nodes n ON n.id=c.node_id
-		WHERE n.kind IN `+vectorKinds+` AND NOT EXISTS (SELECT 1 FROM vec.vectors v WHERE v.text_hash=c.text_hash AND v.model=?)
+		WHERE n.kind IN `+vectorKinds+` AND n.status='active' AND NOT EXISTS (SELECT 1 FROM vec.vectors v WHERE v.text_hash=c.text_hash AND v.model=?)
 		ORDER BY pri, c.id`, model)
 	if err != nil {
 		return 0, err
@@ -180,6 +181,13 @@ func (d *DB) EmbedPending(ctx context.Context, e Embedder, progress func(done, t
 // DropVectors removes the cached vectors of every model except keep (use "" to remove them all), and the vectors of
 // texts that no wiki, note or fact chunk uses any more (including every code vector). It returns how many were removed.
 func (d *DB) DropVectors(keep string) (int, error) {
+	var chunks int
+	if err := d.QueryRow(`SELECT count(*) FROM chunks`).Scan(&chunks); err != nil {
+		return 0, err
+	}
+	if chunks == 0 {
+		return 0, fmt.Errorf("the index holds no chunks (run `hms rescan` first); refusing to prune the vector cache")
+	}
 	res, err := d.Exec(`DELETE FROM vec.vectors WHERE model <> ? OR text_hash NOT IN
 		(SELECT c.text_hash FROM chunks c JOIN nodes n ON n.id=c.node_id WHERE n.kind IN `+vectorKinds+`)`, keep)
 	if err != nil {
@@ -245,7 +253,7 @@ type scored struct {
 
 // TopK returns the chunk ids with the highest dot product with q that pass the filter, best first.
 func (m *Matrix) TopK(q []float32, k int, f Filter) ([]int64, error) {
-	if len(m.IDs) == 0 {
+	if len(m.IDs) == 0 || k <= 0 {
 		return nil, nil
 	}
 	if len(q) != m.Dim {

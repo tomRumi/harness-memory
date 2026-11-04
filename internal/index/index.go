@@ -3,13 +3,15 @@
 package index
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
-	_ "modernc.org/sqlite"
+	"modernc.org/sqlite"
 )
 
 const schema = `
@@ -42,6 +44,21 @@ CREATE TABLE IF NOT EXISTS vec.vectors(text_hash TEXT NOT NULL, model TEXT NOT N
   PRIMARY KEY(text_hash, model));
 `
 
+// attach maps a connection string to the vector file that every connection opened with it must attach as "vec".
+// A connection hook is used because database/sql may replace the connection; an ATTACH run once would be lost.
+var attach sync.Map
+
+func init() {
+	sqlite.RegisterConnectionHook(func(conn sqlite.ExecQuerierContext, dsn string) error {
+		p, ok := attach.Load(dsn)
+		if !ok {
+			return nil
+		}
+		_, err := conn.ExecContext(context.Background(), "ATTACH DATABASE '"+strings.ReplaceAll(p.(string), "'", "''")+"' AS vec", nil)
+		return err
+	})
+}
+
 // DB is an open index.
 type DB struct {
 	*sql.DB
@@ -53,7 +70,9 @@ func Open(path string) (*DB, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}
-	d, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)")
+	dsn := "file:" + path + "?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
+	attach.Store(dsn, strings.TrimSuffix(path, ".db")+"-vectors.db") // the hook below attaches it on every new connection
+	d, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
 	}
@@ -82,11 +101,6 @@ func Open(path string) (*DB, error) {
 	if _, err := d.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, schemaVersion)); err != nil {
 		d.Close()
 		return nil, err
-	}
-	vecPath := strings.TrimSuffix(path, ".db") + "-vectors.db"
-	if _, err := d.Exec(`ATTACH DATABASE ? AS vec`, vecPath); err != nil {
-		d.Close()
-		return nil, fmt.Errorf("open vector cache: %w", err)
 	}
 	if _, err := d.Exec(vectorSchema); err != nil {
 		d.Close()

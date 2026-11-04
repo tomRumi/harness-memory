@@ -49,7 +49,7 @@ func (s *Server) Reload() error {
 	if s.Emb == nil {
 		return nil
 	}
-	m, err := s.DB.LoadMatrix(s.Emb.Model())
+	m, err := s.DB.LoadMatrix(s.Emb.ID())
 	if err != nil {
 		return err
 	}
@@ -228,13 +228,13 @@ func (s *Server) Stats(ctx context.Context, in StatsIn) string {
 	s.DB.QueryRow(`SELECT count(*) FROM nodes WHERE kind='note' AND status<>'active'`+projClause(proj), projArgs(proj)...).Scan(&other)
 	fmt.Fprintf(&b, "notes: %d active, %d archived, superseded or retired\n", active, other)
 	if s.Emb == nil {
-		b.WriteString("embedder: not configured (keyword match only)\n")
+		b.WriteString("vectors: off (keyword match only; start with `serve -vectors` to use the embedder)\n")
 	} else {
 		hc, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
 		if _, err := s.Emb.Query(hc, "health"); err != nil {
 			fmt.Fprintf(&b, "embedder: unavailable: %v\n", err)
-		} else if miss, total, err := s.DB.Pending(s.Emb.Model()); err == nil {
+		} else if miss, total, err := s.DB.Pending(s.Emb.ID()); err == nil {
 			fmt.Fprintf(&b, "embedder: %s ok; %d of %d wiki/note/fact chunk texts have a vector\n", s.Emb.Model(), total-miss, total)
 		}
 	}

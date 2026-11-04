@@ -75,3 +75,20 @@ func TestErrorsAreSpecific(t *testing.T) {
 		t.Fatal("unknown API must be an error")
 	}
 }
+
+func TestIDChangesWithTheDocumentPrefixAndOpenAIOrderIsRestored(t *testing.T) {
+	a := New(Config{Model: "m", DocPrefix: "search_document: "})
+	b := New(Config{Model: "m", DocPrefix: ""})
+	c := New(Config{Model: "m", DocPrefix: "passage: "})
+	if a.ID() == b.ID() || a.ID() == c.ID() || b.ID() != "m" {
+		t.Fatalf("ids %q %q %q", a.ID(), b.ID(), c.ID())
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"data":[{"index":1,"embedding":[0,3]},{"index":0,"embedding":[4,0]}]}`)) // out of order
+	}))
+	defer srv.Close()
+	v, err := New(Config{API: "openai", URL: srv.URL, Model: "m"}).Docs(context.Background(), []string{"first", "second"})
+	if err != nil || v[0][0] != 1 || v[1][1] != 1 {
+		t.Fatalf("order not restored: %v %v", v, err)
+	}
+}

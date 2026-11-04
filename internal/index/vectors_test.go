@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // bagEmbedder is a deterministic stand-in for a model: a hashed bag of words, unit length. Texts that share words are close.
@@ -42,6 +43,7 @@ func (b *bagEmbedder) vec(text string) []float32 {
 	return v
 }
 func (b *bagEmbedder) Model() string { return b.model }
+func (b *bagEmbedder) ID() string    { return b.model }
 func (b *bagEmbedder) Docs(ctx context.Context, texts []string) ([][]float32, error) {
 	b.calls.Add(int64(len(texts)))
 	if b.fail.Load() {
@@ -228,5 +230,92 @@ func TestBestKeywordHitsKeepAPlace(t *testing.T) {
 	}
 	if !found || len(hits) != 3 {
 		t.Fatalf("the exact keyword match must keep a place: %+v", hits)
+	}
+}
+
+type slowEmbedder struct{ bagEmbedder }
+
+func (s *slowEmbedder) Query(ctx context.Context, text string) ([]float32, error) {
+	s.calls.Add(1000)
+	<-ctx.Done() // a model server that hangs
+	return nil, ctx.Err()
+}
+
+func TestHungEmbedderFallsBackToKeywordsQuickly(t *testing.T) {
+	repo, _ := fixture(t)
+	d := openDB(t)
+	d.Rescan(repo)
+	good := &bagEmbedder{model: "bag"}
+	d.EmbedPending(context.Background(), good, nil)
+	m, _ := d.LoadMatrix("bag")
+	slow := &slowEmbedder{bagEmbedder{model: "bag"}}
+	start := time.Now()
+	hits, via, warn := d.Hybrid(context.Background(), slow, m, "frobnicator directory", Filter{Limit: 3, Kinds: []string{"wiki"}})
+	if el := time.Since(start); el > QueryEmbedTimeout+time.Second {
+		t.Fatalf("recall took %s with a hung embedder", el)
+	}
+	if warn == nil || via != "keyword" || len(hits) == 0 {
+		t.Fatalf("via %q warn %v hits %d", via, warn, len(hits))
+	}
+	// a code-only recall never calls the model at all
+	before := slow.calls.Load()
+	d.Hybrid(context.Background(), slow, m, "compute_total", Filter{Limit: 3, Kinds: []string{"code"}})
+	if slow.calls.Load() != before {
+		t.Fatal("the embedder was called for a code-only recall")
+	}
+}
+
+func TestPruneIsSafe(t *testing.T) {
+	repo, _ := fixture(t)
+	d := openDB(t)
+	// an empty index must not delete the vector cache
+	d.Exec(`INSERT INTO vec.vectors(text_hash, model, dim, vec) VALUES('h1','bag',2,x'0000000000000000')`)
+	if _, err := d.DropVectors("bag"); err == nil {
+		t.Fatal("pruning an empty index must be refused")
+	}
+	var n int
+	d.QueryRow(`SELECT count(*) FROM vec.vectors`).Scan(&n)
+	if n != 1 {
+		t.Fatalf("the cache was emptied: %d", n)
+	}
+	d.Rescan(repo)
+	d.EmbedPending(context.Background(), &bagEmbedder{model: "bag"}, nil)
+	if k, err := d.DropVectors("bag"); err != nil || k < 1 { // the unrelated 'h1' vector is pruned, the real ones stay
+		t.Fatalf("%d %v", k, err)
+	}
+	if miss, _, _ := d.Pending("bag"); miss != 0 {
+		t.Fatalf("prune removed vectors that are in use: %d missing", miss)
+	}
+}
+
+func TestRetiredNodesAreNotEmbeddedAndTopKGuardsK(t *testing.T) {
+	repo, _ := fixture(t)
+	d := openDB(t)
+	d.Rescan(repo)
+	e := &bagEmbedder{model: "bag"}
+	d.EmbedPending(context.Background(), e, nil)
+	var retiredText string
+	d.QueryRow(`SELECT c.text FROM chunks c JOIN nodes n ON n.id=c.node_id WHERE n.status='retired'`).Scan(&retiredText)
+	var has int
+	d.QueryRow(`SELECT count(*) FROM vec.vectors v JOIN chunks c ON c.text_hash=v.text_hash JOIN nodes n ON n.id=c.node_id WHERE n.status='retired'`).Scan(&has)
+	if has != 0 {
+		t.Fatal("a retired note was embedded")
+	}
+	m, _ := d.LoadMatrix("bag")
+	if ids, err := m.TopK(make([]float32, m.Dim), 0, Filter{}); err != nil || ids != nil {
+		t.Fatalf("k=0 must return nothing: %v %v", ids, err)
+	}
+}
+
+func TestVectorFileSurvivesAReplacedConnection(t *testing.T) {
+	repo, _ := fixture(t)
+	d := openDB(t)
+	d.Rescan(repo)
+	d.EmbedPending(context.Background(), &bagEmbedder{model: "bag"}, nil)
+	d.SetConnMaxLifetime(time.Millisecond) // database/sql opens a fresh connection for the next call
+	time.Sleep(20 * time.Millisecond)
+	var n int
+	if err := d.QueryRow(`SELECT count(*) FROM vec.vectors`).Scan(&n); err != nil || n == 0 {
+		t.Fatalf("vector table lost after the connection was replaced: %d %v", n, err)
 	}
 }

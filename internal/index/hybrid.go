@@ -4,6 +4,7 @@ import (
 	"context"
 	"sort"
 	"strings"
+	"time"
 )
 
 // hitsByID fetches the chunks with the given ids as hits, keeping only active ones.
@@ -51,8 +52,10 @@ func (d *DB) Hybrid(ctx context.Context, e Embedder, m *Matrix, query string, f 
 		return nil, "", err
 	}
 	var vecIDs []int64
-	if e != nil && m != nil && len(m.IDs) > 0 && strings.TrimSpace(query) != "" {
-		q, qerr := e.Query(ctx, query)
+	if e != nil && m != nil && len(m.IDs) > 0 && strings.TrimSpace(query) != "" && wantsVectors(f) {
+		qctx, cancel := context.WithTimeout(ctx, QueryEmbedTimeout)
+		defer cancel()
+		q, qerr := e.Query(qctx, query)
 		if qerr != nil {
 			warn = qerr
 		} else if vecIDs, qerr = m.TopK(q, Candidates, f); qerr != nil {
@@ -154,4 +157,22 @@ func (d *DB) Hybrid(ctx context.Context, e Embedder, m *Matrix, query string, f 
 		via = "hybrid"
 	}
 	return hits, via, warn
+}
+
+// QueryEmbedTimeout bounds the embedding of a query. A hung model server must not stall a recall: after this the
+// keyword result is returned.
+const QueryEmbedTimeout = 2 * time.Second
+
+// wantsVectors is false when the filter asks only for kinds that have no vectors (code): no vector can match, so the
+// model call is skipped.
+func wantsVectors(f Filter) bool {
+	if len(f.Kinds) == 0 {
+		return true
+	}
+	for _, k := range f.Kinds {
+		if k == "wiki" || k == "note" || k == "fact" {
+			return true
+		}
+	}
+	return false
 }
