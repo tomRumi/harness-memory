@@ -2,7 +2,7 @@
 # Leak gate. Refuses a commit whose staged additions (or staged file names) carry a private value.
 #   1. Generic shapes, listed below, always apply.
 #   2. A deny-list of private literals, one per line, case-insensitive, lives in the UNTRACKED file
-#      .leak-denylist at the repository root (CI receives the same list as a secret).
+#      .leak-denylist at the repository root (a CI job can be given the same list as a secret; no workflow is included yet).
 # Enable once per clone:   git config core.hooksPath scripts/hooks
 set -u
 root=$(git rev-parse --show-toplevel) || exit 1
