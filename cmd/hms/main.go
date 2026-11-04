@@ -99,6 +99,7 @@ func main() {
 		proj := fs.String("p", "", "project")
 		kinds := fs.String("k", "", "kinds, comma separated: wiki,code,note,fact")
 		n := fs.Int("n", 5, "number of hits")
+		asJSON := fs.Bool("json", false, "print hits as JSON, with the full text")
 		fs.Parse(rest)
 		d := open(p)
 		defer d.Close()
@@ -109,6 +110,18 @@ func main() {
 		hits, err := d.Keyword(strings.Join(fs.Args(), " "), f)
 		if err != nil {
 			die("%v", err)
+		}
+		if *asJSON {
+			type jh struct {
+				Node, Kind, Project, Path, Section, Text string
+				Score                                    float64
+			}
+			out := make([]jh, 0, len(hits))
+			for _, h := range hits {
+				out = append(out, jh{h.NodeID, h.Kind, h.Project, h.Path, h.Section, h.Text, h.Score})
+			}
+			json.NewEncoder(os.Stdout).Encode(out)
+			return
 		}
 		if len(hits) == 0 {
 			fmt.Println("no results")

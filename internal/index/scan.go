@@ -1,6 +1,7 @@
 package index
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -21,8 +22,9 @@ var Relations = []string{"supersedes", "depends_on", "part_of", "produced_by", "
 
 // Project is one entry of projects.yaml in the memory repository.
 type Project struct {
-	Name      string   `yaml:"name"`
-	CodeRoots []string `yaml:"code_roots"`
+	Name       string   `yaml:"name"`
+	CodeRoots  []string `yaml:"code_roots"`
+	IgnoreDirs []string `yaml:"ignore_dirs"` // directory names skipped anywhere under a code root (dumps, backups, archives)
 }
 
 type projectsFile struct {
@@ -78,15 +80,27 @@ var (
 	skipBase = map[string]bool{"package-lock.json": true, "yarn.lock": true, "poetry.lock": true, "pdm.lock": true, "uv.lock": true, "composer.lock": true}
 )
 
-func skipCode(rel string) bool {
+// secretSuffix names files that usually hold credentials or keys. They are never indexed, because everything
+// indexed can be returned to an agent.
+var secretSuffix = map[string]bool{".pem": true, ".key": true, ".p12": true, ".pfx": true, ".kdbx": true, ".jks": true, ".keystore": true}
+
+func skipCode(rel string, ignore map[string]bool) bool {
 	parts := strings.Split(rel, "/")
+	for _, p := range parts {
+		if strings.HasPrefix(p, ".") { // hidden directories and hidden files (.git, .env, .claude, .worktrees ...)
+			return true
+		}
+	}
 	for _, p := range parts[:len(parts)-1] {
-		if skipParts[p] {
+		if skipParts[p] || ignore[p] {
 			return true
 		}
 	}
 	base := parts[len(parts)-1]
 	low := strings.ToLower(base)
+	if secretSuffix[filepath.Ext(low)] || strings.HasPrefix(low, "id_rsa") || strings.HasPrefix(low, "id_ed25519") {
+		return true
+	}
 	if skipBase[base] || strings.HasSuffix(low, ".min.js") || strings.HasSuffix(low, ".min.css") {
 		return true
 	}
@@ -138,6 +152,10 @@ func collect(repo string) (map[string]parsed, []string, error) {
 		return nil, nil, err
 	}
 	for _, pr := range projects {
+		ignore := map[string]bool{}
+		for _, d := range pr.IgnoreDirs {
+			ignore[d] = true
+		}
 		for _, root := range pr.CodeRoots {
 			err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 				if err != nil {
@@ -146,16 +164,16 @@ func collect(repo string) (map[string]parsed, []string, error) {
 				rel, _ := filepath.Rel(root, path)
 				rel = filepath.ToSlash(rel)
 				if d.IsDir() {
-					if skipParts[d.Name()] {
+					if rel != "." && (skipParts[d.Name()] || ignore[d.Name()] || strings.HasPrefix(d.Name(), ".")) {
 						return filepath.SkipDir
 					}
 					return nil
 				}
-				if !d.Type().IsRegular() || skipCode(rel) {
+				if !d.Type().IsRegular() || skipCode(rel, ignore) {
 					return nil
 				}
 				raw, err := os.ReadFile(path)
-				if err != nil {
+				if err != nil || isBinary(raw) {
 					return nil
 				}
 				pieces := chunk.Code(string(raw))
@@ -333,4 +351,13 @@ func insert(tx *sql.Tx, p parsed) error {
 		}
 	}
 	return nil
+}
+
+// isBinary reports whether data looks like a binary file: a NUL byte in the first 8 KB.
+func isBinary(data []byte) bool {
+	n := len(data)
+	if n > 8192 {
+		n = 8192
+	}
+	return bytes.IndexByte(data[:n], 0) >= 0
 }

@@ -30,10 +30,15 @@ func fixture(t *testing.T) (repo, code string) {
 	write(t, repo, "notes/alpha/n-0002.md", "---\nstatus: retired\nretired_reason: wrong\n---\n\nOld retired claim about quibblewomp.\n")
 	write(t, repo, "facts/global/f-1.md", "---\ncategory: user_pref\ntrust: 0.5\n---\n\nPrefers short answers.\n")
 	write(t, repo, "wiki/alpha/broken.md", "---\ntitle: [unclosed\n---\nStill readable text about gadgets.\n")
-	write(t, repo, "projects.yaml", "projects:\n  - name: alpha\n    code_roots: ['"+code+"']\n")
+	write(t, repo, "projects.yaml", "projects:\n  - name: alpha\n    code_roots: ['"+code+"']\n    ignore_dirs: [backups]\n")
 	write(t, code, "src/main.py", "def compute_total(items):\n    return sum(items)\n")
 	write(t, code, "node_modules/skip.js", "ignored()\n")
 	write(t, code, "assets/logo.png", "binary")
+	write(t, code, "assets/blob.dat", "head\x00\x01\x02 not text")
+	write(t, code, ".env", "TOK"+"EN_VALUE=should-never-be-indexed-12345\n") // built at run time so the leak gate does not trip on the fixture
+	write(t, code, ".worktrees/copy/src/main.py", "def compute_total(items):\n    return sum(items)\n")
+	write(t, code, "keys/server.pem", "-----BEGIN-----\nabc\n")
+	write(t, code, "backups/dump.sql", "INSERT INTO t VALUES (1);\n")
 	return repo, code
 }
 
@@ -193,5 +198,27 @@ func TestKeywordRecallRulesStatusFiltersAndIdentifiers(t *testing.T) {
 	// FTS syntax in the query must not break the search
 	if _, err := d.Keyword(`"unterminated AND ( NEAR`, Filter{}); err != nil {
 		t.Fatalf("query syntax leaked into FTS: %v", err)
+	}
+}
+
+func TestCodeLayerNeverIndexesHiddenBinarySecretOrIgnoredFiles(t *testing.T) {
+	repo, _ := fixture(t)
+	d := openDB(t)
+	d.Rescan(repo)
+	rows, _ := d.Query(`SELECT path FROM nodes WHERE kind='code' ORDER BY path`)
+	var got []string
+	for rows.Next() {
+		var p string
+		rows.Scan(&p)
+		got = append(got, p)
+	}
+	rows.Close()
+	if !reflect.DeepEqual(got, []string{"src/main.py"}) {
+		t.Fatalf("code layer must hold only src/main.py, got %v", got)
+	}
+	for _, q := range []string{"should-never-be-indexed-12345", "TOKEN_VALUE", "BEGIN", "INSERT"} {
+		if hits, _ := d.Keyword(q, Filter{}); len(hits) != 0 {
+			t.Fatalf("%q reached the index: %+v", q, hits)
+		}
 	}
 }
