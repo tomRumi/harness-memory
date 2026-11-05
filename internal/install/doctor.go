@@ -129,13 +129,13 @@ func doctorRepoState(repo string, line func(level, what, detail string)) {
 			return
 		}
 	}
-	out, err := exec.Command("git", "-C", repo, "diff", "--cached", "--name-only").Output()
+	out, err := exec.Command("git", "-C", repo, "diff", "--cached", "--name-only", "-z").Output()
 	if err != nil {
 		line("FAIL", "commits", "git diff --cached failed: "+err.Error())
 		return
 	}
 	var foreign []string
-	for _, f := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	for _, f := range strings.Split(string(out), "\x00") {
 		if f != "" && !strings.HasPrefix(f, "notes/") && !strings.HasPrefix(f, "facts/") && !strings.HasPrefix(f, "wiki/") {
 			foreign = append(foreign, f)
 		}

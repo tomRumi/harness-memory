@@ -174,11 +174,11 @@ func (c *Committer) commit(snap []string) error {
 	}
 	if len(gone) > 0 {
 		// a file that was created and deleted before it was ever committed is unknown to git and needs no staging
-		out, err := c.git(append([]string{"--literal-pathspecs", "ls-files", "--"}, gone...)...)
+		out, err := c.git(append([]string{"--literal-pathspecs", "ls-files", "-z", "--"}, gone...)...)
 		if err != nil {
 			return fmt.Errorf("git ls-files: %v: %s", err, out)
 		}
-		for _, f := range strings.Split(out, "\n") {
+		for _, f := range strings.Split(out, "\x00") {
 			if f != "" {
 				add = append(add, f)
 			}
@@ -189,15 +189,15 @@ func (c *Committer) commit(snap []string) error {
 			return fmt.Errorf("git add: %v: %s", err, out)
 		}
 	}
-	staged, err := c.git("diff", "--cached", "--name-only")
+	staged, err := c.git("diff", "--cached", "--name-only", "-z") // -z: a path with accents is not shown quoted
 	if err != nil {
 		return fmt.Errorf("git diff --cached: %v: %s", err, staged)
 	}
 	if staged == "" {
 		return nil
 	}
-	for _, f := range strings.Split(staged, "\n") {
-		if !strings.HasPrefix(f, "notes/") && !strings.HasPrefix(f, "facts/") && !strings.HasPrefix(f, "wiki/") {
+	for _, f := range strings.Split(staged, "\x00") {
+		if f != "" && !strings.HasPrefix(f, "notes/") && !strings.HasPrefix(f, "facts/") && !strings.HasPrefix(f, "wiki/") {
 			// the owner has staged something else; committing now would sweep it into a memory commit
 			return fmt.Errorf("not committing: %q is staged and is not a note, a fact or a wiki entry", f)
 		}
