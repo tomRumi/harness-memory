@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tomRumi/harness-memory-service/internal/index"
 	"github.com/tomRumi/harness-memory-service/internal/md"
 	"github.com/tomRumi/harness-memory-service/internal/store"
 	"github.com/tomRumi/harness-memory-service/internal/wiki"
@@ -45,6 +46,7 @@ type Report struct {
 	Left       []string     `json:"left"`        // notes still pending: not assigned, or on a stale page
 	Unknown    []string     `json:"unknown"`     // ids that are not notes of the project
 	Retired    []string     `json:"retired"`     // notes deleted because sessions rated them unhelpful
+	Warnings   []string     `json:"warnings"`    // things worth a look that did not stop the write (a new page that copies another)
 	Commit     string       `json:"commit,omitempty"`
 }
 
@@ -63,6 +65,9 @@ func (r Report) String() string {
 		for _, pr := range p.Problems {
 			fmt.Fprintf(&b, "    - %s\n", pr)
 		}
+	}
+	for _, w := range r.Warnings {
+		fmt.Fprintf(&b, "  warning: %s\n", w)
 	}
 	for _, l := range []struct {
 		name string
@@ -106,7 +111,7 @@ var reNoteID = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 // to the Unsorted page as bullets. A stale page and a note that no page took stay pending.
 func Submit(ctx context.Context, st *store.Store, sub Submission) (Report, error) {
 	project := strings.TrimSpace(sub.Project)
-	rep := Report{Project: project, Pages: []PageReport{}, Left: []string{}, Unknown: []string{}, Retired: []string{}}
+	rep := Report{Project: project, Pages: []PageReport{}, Left: []string{}, Unknown: []string{}, Retired: []string{}, Warnings: []string{}}
 	if project == "" || strings.ContainsAny(project, "/\\") || strings.HasPrefix(project, ".") {
 		return rep, fmt.Errorf("invalid project name %q", project)
 	}
@@ -243,6 +248,7 @@ func Submit(ctx context.Context, st *store.Store, sub Submission) (Report, error
 			}
 		}
 
+		var mat *index.Matrix // vectors of the existing pages, loaded when the first new page is written
 		// Phase C: compose and write the passing pages, then Unsorted, then delete the notes.
 		var bullets []string
 		var gone []Note
@@ -259,6 +265,10 @@ func Submit(ctx context.Context, st *store.Store, sub Submission) (Report, error
 					pr.Status, pr.Problems = Unsorted, []string{err.Error()}
 				} else if err := tx.Write(j.rel, data); err != nil {
 					return err
+				} else if !j.exists {
+					if w := copyWarning(ctx, st, project, j.title, &mat); w != "" {
+						rep.Warnings = append(rep.Warnings, w)
+					}
 				}
 			case Stale:
 				rep.Left = append(rep.Left, pr.Notes...)
@@ -437,4 +447,31 @@ func union(a, b []string) []string {
 		}
 	}
 	return out
+}
+
+// copyWarning says so when the new page title (just written and indexed, not yet embedded) has a page vector within
+// index.DuplicateThreshold of another page of the project. It is only advice: any failure to compute it gives "".
+func copyWarning(ctx context.Context, st *store.Store, project, title string, mat **index.Matrix) string {
+	if st.Emb == nil {
+		return ""
+	}
+	id := "wiki/" + project + "/" + title
+	ctx, cancel := context.WithTimeout(ctx, index.NodeVectorTimeout)
+	defer cancel()
+	v, err := st.DB.NodeVector(ctx, st.Emb, id)
+	if err != nil {
+		return ""
+	}
+	if *mat == nil {
+		m, err := st.DB.LoadMatrix(st.Emb.ID())
+		if err != nil {
+			return ""
+		}
+		*mat = m
+	}
+	best, ok := (*mat).MostSimilar(v, project, id)
+	if !ok || best.Score < index.DuplicateThreshold {
+		return ""
+	}
+	return fmt.Sprintf("page %q looks like a copy of [[%s]] (%.2f); consider merging them", title, best.Title, best.Score)
 }
