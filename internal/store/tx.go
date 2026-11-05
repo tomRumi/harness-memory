@@ -17,7 +17,10 @@ type Tx struct {
 	seen    map[string]bool
 	undo    []undoEntry
 	undone  map[string]bool
+	events  []txEvent // recorded in events.db only when the operation succeeds
 }
+
+type txEvent struct{ kind, node, project, detail string }
 
 // undoEntry is a file as it was before the first change of the operation: its bytes, or its absence.
 type undoEntry struct {
@@ -51,17 +54,28 @@ func (s *Store) Do(fn func(tx *Tx) error) (err error) {
 			panic(r)
 		}
 	}()
-	return fn(tx)
+	if err = fn(tx); err != nil {
+		return err
+	}
+	for _, e := range tx.events {
+		s.Event(e.kind, e.node, e.project, e.detail)
+	}
+	return nil
 }
 
-// remember records rel as it is now, once.
-func (tx *Tx) remember(rel string) {
+// remember records rel as it is now, once. A file that exists but cannot be read is an error, never "missing":
+// putting it back would be impossible, so it is not touched.
+func (tx *Tx) remember(rel string) error {
 	if tx.undone[rel] {
-		return
+		return nil
+	}
+	data, err := os.ReadFile(filepath.Join(tx.s.Repo, filepath.FromSlash(rel)))
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("cannot read %s, so it is not changed: %w", rel, err)
 	}
 	tx.undone[rel] = true
-	data, err := os.ReadFile(filepath.Join(tx.s.Repo, filepath.FromSlash(rel)))
 	tx.undo = append(tx.undo, undoEntry{rel: rel, data: data, existed: err == nil})
+	return nil
 }
 
 // rollback restores every remembered file, newest first, and the index entries. It returns the first failure after
@@ -107,7 +121,9 @@ func (tx *Tx) note(rel string) {
 
 // Write writes rel (a path under the repository) atomically and updates its index entry.
 func (tx *Tx) Write(rel string, data []byte) error {
-	tx.remember(rel)
+	if err := tx.remember(rel); err != nil {
+		return err
+	}
 	if err := writeFile(filepath.Join(tx.s.Repo, filepath.FromSlash(rel)), data); err != nil {
 		return err
 	}
@@ -118,10 +134,15 @@ func (tx *Tx) Write(rel string, data []byte) error {
 // Delete removes the note or fact node id (for example notes/p/<uuid>) and updates the index. A non-empty event
 // kind is recorded in the event history with the detail.
 func (tx *Tx) Delete(id, project, event, detail string) error {
-	tx.remember(id + ".md")
-	rel, err := tx.s.removeNode(id, project, event, detail)
+	if err := tx.remember(id + ".md"); err != nil {
+		return err
+	}
+	rel, err := tx.s.removeNode(id, project, "", "")
 	if err != nil {
 		return err
+	}
+	if event != "" {
+		tx.events = append(tx.events, txEvent{event, id, project, detail})
 	}
 	tx.note(rel)
 	return tx.s.DB.Upsert(tx.s.Repo, rel)

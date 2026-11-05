@@ -256,18 +256,21 @@ func (c *Committer) commit(snap []string, msg string) error {
 	return nil
 }
 
-// Sweep notes the notes and facts that are on disk but not committed (for example after a crash) so that they are
-// committed too. Temporary files of an interrupted write are skipped.
+// Sweep notes the notes, facts and wiki pages that are on disk but not committed (for example after a crash) so that
+// they are committed too. Temporary files of an interrupted write are skipped. The whole leftover set goes into one
+// commit or none: when git cannot list it, nothing is noted, and when a file of it cannot be added, commit stops
+// before the commit, so a deletion is never committed without the page it belongs with.
 func (c *Committer) Sweep() {
 	if c.off {
 		return
 	}
-	out, err := exec.Command("git", "-C", c.repo, "ls-files", "--others", "--modified", "--exclude-standard", "--", "notes", "facts", "wiki").Output()
+	// -z: git does not quote a path with accents or other non-ASCII characters
+	out, err := exec.Command("git", "-C", c.repo, "ls-files", "-z", "--others", "--modified", "--exclude-standard", "--", "notes", "facts", "wiki").Output()
 	if err != nil {
 		return
 	}
 	var rels []string
-	for _, f := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	for _, f := range strings.Split(string(out), "\x00") {
 		if f != "" && strings.HasSuffix(f, ".md") && !strings.HasPrefix(filepath.Base(f), ".") {
 			rels = append(rels, f)
 		}

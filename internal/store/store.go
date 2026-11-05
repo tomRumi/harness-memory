@@ -56,6 +56,7 @@ type Store struct {
 	embedMu   sync.Mutex
 	embedCond *sync.Cond
 	embedRun  bool // the embedding worker is running
+	closed    bool // Close was called: no new embedding work starts
 	embedWant bool // a write came in since the worker last started a pass
 	embedWith index.Embedder
 	embedErr  error // the last embedding error after a write
@@ -79,10 +80,13 @@ func New(repo string, db *index.DB, emb index.Embedder, commit *Committer, event
 
 // Close makes the last commit, stops the committer and closes the event history.
 func (s *Store) Close() error {
-	s.WaitEmbed()
+	s.embedMu.Lock()
+	s.closed = true // a write after Close starts no worker
+	s.embedMu.Unlock()
 	if s.Commit != nil {
-		s.Commit.Stop()
+		s.Commit.Stop() // the commit first: it does not wait for the embedder
 	}
+	s.WaitEmbed()
 	return s.ev.Close()
 }
 
@@ -198,6 +202,9 @@ func (s *Store) kickEmbed() {
 	}
 	s.embedMu.Lock()
 	defer s.embedMu.Unlock()
+	if s.closed {
+		return
+	}
 	s.embedWant, s.embedWith = true, emb
 	if s.embedRun {
 		return
@@ -236,11 +243,25 @@ func (s *Store) embedLoop() {
 	}
 }
 
-// WaitEmbed returns when no embedding is running or wanted. Tests use it; a write never waits for it.
+// WaitEmbedMax is the longest WaitEmbed (and so Close) waits for the embedding worker, however many writes arrive.
+const WaitEmbedMax = 5 * time.Second
+
+// WaitEmbed returns when no embedding is running, or after WaitEmbedMax at the latest. Tests use it; a write never
+// waits for it.
 func (s *Store) WaitEmbed() {
 	s.embedMu.Lock()
 	defer s.embedMu.Unlock()
-	for s.embedRun {
+	if !s.embedRun {
+		return
+	}
+	t := time.AfterFunc(WaitEmbedMax, func() {
+		s.embedMu.Lock()
+		s.embedCond.Broadcast()
+		s.embedMu.Unlock()
+	})
+	defer t.Stop()
+	deadline := time.Now().Add(WaitEmbedMax)
+	for s.embedRun && time.Now().Before(deadline) {
 		s.embedCond.Wait()
 	}
 }
@@ -671,13 +692,17 @@ func (s *Store) indexPageLocked(proj string) (rel, content string, wrote bool, e
 		return "", "", false, err
 	}
 	rel = "wiki/" + proj + "/" + wiki.IndexTitle + ".md"
-	if old, err := os.ReadFile(filepath.Join(s.Repo, filepath.FromSlash(rel))); err == nil {
+	old, err := os.ReadFile(filepath.Join(s.Repo, filepath.FromSlash(rel)))
+	switch {
+	case err == nil:
 		if string(old) == content {
 			return rel, content, false, nil
 		}
 		if !md.Parse(old).Bool("generated") {
 			return rel, content, false, ErrHandWritten
 		}
+	case !os.IsNotExist(err): // a file that cannot be read is not known to be the generated one: it is left alone
+		return rel, content, false, fmt.Errorf("%w (cannot read it: %v)", ErrHandWritten, err)
 	}
 	return rel, content, true, nil
 }
