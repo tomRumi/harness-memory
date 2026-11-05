@@ -63,6 +63,13 @@ Text with [[Another Page]], [[Another Page|shown text]], [[Another Page#Heading]
 - `hms wiki index [-p project]` writes `wiki/<project>/Index.md` (`generated: true`): one line
   `- [[Title]] - <summary or first sentence>` per page, sorted by title, never listing itself. The file is written and
   committed only when its content changed. It is a normal page for search.
+- **Meaning-based features** use the stored vectors (run `hms embed` first; the embedder is never called). A page's
+  vector is the normalised mean of its chunk vectors; Index and Unsorted pages are left out of every list.
+  `hms wiki related <title or path> [-n 5] [-p P]` prints `score  [[Title]]  summary` for the closest pages;
+  `wiki_read` adds `Related: [[A]] (0.81), [[B]] (0.77)` (top 5 at or above `index.RelatedFloor`; omitted without
+  vectors). `hms wiki duplicates [-p P] [-t T]` prints pairs of pages whose cosine is at least T (default
+  `index.DuplicateThreshold`); a merge that creates a page close to an existing one adds a warning to its report.
+  `hms wiki eval-pairs -pairs FILE` scores a file of related, unrelated and copy pairs (read only, exit 0).
 
 ## Curation: merging notes into wiki pages
 
@@ -85,7 +92,7 @@ submission {"project", "pages":[...]}          (the answer plus the project)
 ```
 
 `pages` lists every page of the project except `Index`; `related` holds up to five existing pages most like the notes
-(under 40,000 bytes each) with the sha256 `hash` of the file. The model returns the whole new body of each changed page
+(under 40,000 bytes each; chosen by vote: each note names its three closest pages by chunk vectors, and keywords are used only when there are no vectors) with the sha256 `hash` of the file. The model returns the whole new body of each changed page
 and copies `hash` into `base_hash` (empty for a new page). The service writes the frontmatter: a new page gets title,
 summary, tags and `sources`; an existing page keeps its frontmatter except that `summary` is replaced when given,
 `tags` are united and one `sources` entry `<date>: <short note ids>` is added. Each note goes to at most one page (twice
