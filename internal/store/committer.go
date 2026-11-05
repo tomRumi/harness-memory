@@ -22,7 +22,7 @@ type Committer struct {
 	mu      sync.Mutex       // guards the fields below; never held while git runs
 	runMu   sync.Mutex       // one flush at a time
 	paths   map[string]int64 // path -> number of the last Notify that named it
-	msg     string           // commit message given by the last Notify that carried one; empty: the default
+	msgs    []string         // commit messages given by the Notify calls since the last commit, in order; none: the default
 	seq     int64
 	timer   *time.Timer
 	backoff time.Duration
@@ -53,13 +53,14 @@ func (c *Committer) LastErr() error { c.mu.Lock(); defer c.mu.Unlock(); return c
 // Notify records the files (paths relative to the repository) that changed and schedules a commit.
 func (c *Committer) Notify(rels ...string) { c.NotifyMsg("", rels...) }
 
-// NotifyMsg is Notify with a commit message. When several Notify calls fall into one commit, the message of the last
-// call that carried one is used; with none the message is "memory: N change(s)".
+// NotifyMsg is Notify with a commit message. When several Notify calls fall into one commit, the messages of all of them
+// call that carried one is kept: the first is the subject of the commit, the others follow in the body (the whole
+// message is cut at MaxMessage characters). With none the message is "memory: N change(s)".
 func (c *Committer) NotifyMsg(msg string, rels ...string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if msg != "" {
-		c.msg = msg
+		c.msgs = append(c.msgs, msg)
 	}
 	for _, r := range rels {
 		c.seq++
@@ -79,6 +80,16 @@ func (c *Committer) armLocked(d time.Duration) {
 		return
 	}
 	c.timer = time.AfterFunc(d, func() { c.Flush() })
+}
+
+// Detached reports whether HEAD points at no branch (a checked-out commit or tag). Commits then would be lost the
+// moment the owner switches branch, so none are made. An unborn branch (no commit yet) is a branch.
+func (c *Committer) Detached() bool {
+	if c.off {
+		return false
+	}
+	_, err := c.git("symbolic-ref", "-q", "HEAD")
+	return err != nil
 }
 
 // Busy reports whether git is in the middle of a merge or a rebase.
@@ -133,6 +144,14 @@ func (c *Committer) Flush() {
 		c.mu.Unlock()
 		return
 	}
+	c.mu.Unlock()
+	detached := c.Detached() // runs git: the state lock is not held
+	c.mu.Lock()
+	if detached {
+		c.armLocked(c.quiet) // the owner may check out a branch again; the files stay
+		c.mu.Unlock()
+		return
+	}
 	if c.busyLocked() {
 		c.armLocked(c.quiet) // wait the merge or rebase out; the files stay
 		c.mu.Unlock()
@@ -144,11 +163,11 @@ func (c *Committer) Flush() {
 		snap = append(snap, p)
 		seen[p] = n
 	}
-	msg := c.msg
+	msgs := append([]string(nil), c.msgs...)
 	c.mu.Unlock()
 	sort.Strings(snap)
 
-	err := c.commit(snap, msg)
+	err := c.commit(snap, joinMessages(msgs))
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -162,12 +181,23 @@ func (c *Committer) Flush() {
 		}
 	}
 	c.backoff, c.lastErr = 0, nil
-	if c.msg == msg {
-		c.msg = ""
-	}
+	c.msgs = c.msgs[len(msgs):]
 	if len(c.paths) > 0 {
 		c.armLocked(c.quiet)
 	}
+}
+
+// MaxMessage is the longest commit message, in characters.
+const MaxMessage = 2000
+
+// joinMessages makes one commit message of the messages of several Notify calls: the first is the subject, the others
+// follow in the body, and the whole is cut at MaxMessage characters. No message gives "" (the default is used).
+func joinMessages(msgs []string) string {
+	out := strings.Join(msgs, "\n\n")
+	if r := []rune(out); len(r) > MaxMessage {
+		out = string(r[:MaxMessage-1]) + "…"
+	}
+	return out
 }
 
 // commit stages the given paths and commits them. A tracked path that no longer exists is staged as a deletion. Only
@@ -232,7 +262,7 @@ func (c *Committer) Sweep() {
 	if c.off {
 		return
 	}
-	out, err := exec.Command("git", "-C", c.repo, "ls-files", "--others", "--modified", "--exclude-standard", "--", "notes", "facts").Output()
+	out, err := exec.Command("git", "-C", c.repo, "ls-files", "--others", "--modified", "--exclude-standard", "--", "notes", "facts", "wiki").Output()
 	if err != nil {
 		return
 	}
@@ -249,7 +279,7 @@ func (c *Committer) Sweep() {
 
 // CleanTemp removes temporary files of an interrupted write that are older than an hour.
 func CleanTemp(repo string) {
-	for _, d := range []string{"notes", "facts"} {
+	for _, d := range []string{"notes", "facts", "wiki"} {
 		filepath.WalkDir(filepath.Join(repo, d), func(p string, e os.DirEntry, err error) error {
 			if err == nil && !e.IsDir() && strings.HasPrefix(e.Name(), ".tmp-") {
 				if fi, err := e.Info(); err == nil && time.Since(fi.ModTime()) > time.Hour {

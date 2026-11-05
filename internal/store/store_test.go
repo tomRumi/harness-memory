@@ -161,6 +161,7 @@ func TestLearnSucceedsWhileTheEmbedderIsDown(t *testing.T) {
 	if n := countFiles(t, filepath.Join(repo, "notes")); n != 1 {
 		t.Fatalf("%d files written", n)
 	}
+	st.WaitEmbed()
 	if st.EmbedError() == nil {
 		t.Fatal("the embedding error must be kept for stats")
 	}
@@ -179,6 +180,7 @@ func TestLearnSucceedsWhileTheEmbedderIsDown(t *testing.T) {
 	if _, err := st.Learn(context.Background(), "A second note about the glimmerpost relay.", "p", "x", ""); err != nil {
 		t.Fatal(err)
 	}
+	st.WaitEmbed()
 	if st.EmbedError() != nil {
 		t.Fatalf("error not cleared: %v", st.EmbedError())
 	}
@@ -432,7 +434,13 @@ func TestCommitterNeverSweepsInTheOwnersStagedWork(t *testing.T) {
 	if !strings.Contains(string(out), "README.md") {
 		t.Fatal("the owner's staged file was disturbed")
 	}
-	exec.Command("git", "-C", repo, "rm", "--cached", "-q", "-f", "README.md").Run() // works before the first commit, unlike reset
+	for i := 0; i < 20; i++ { // the committer's own retry may hold index.lock for a moment: try again
+		exec.Command("git", "-C", repo, "rm", "--cached", "-q", "-f", "README.md").Run() // works before the first commit, unlike reset
+		if out, _ := exec.Command("git", "-C", repo, "diff", "--cached", "--name-only").CombinedOutput(); !strings.Contains(string(out), "README.md") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 	os.Remove(filepath.Join(repo, "README.md"))
 	st.Commit.Flush()
 	if st.Commit.Commits() != 1 {

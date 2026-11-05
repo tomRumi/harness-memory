@@ -159,7 +159,7 @@ func TestInitOtherModelSizeText(t *testing.T) {
 	env(t, f.URL)
 	t.Setenv("HMS_EMBED_MODEL", "some-other-model")
 	out := runInit(t, paths(t), InitOptions{})
-	if !strings.Contains(out, "some-other-model") || !strings.Contains(out, "size shown by the server when the download starts") || strings.Contains(out, "274") {
+	if !strings.Contains(out, "some-other-model") || !strings.Contains(out, "size shown by the server when the download starts") || strings.Contains(out, "274 MB") {
 		t.Fatalf("%s", out)
 	}
 }

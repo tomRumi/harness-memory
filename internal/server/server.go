@@ -4,6 +4,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"regexp"
 	"sort"
@@ -23,6 +24,8 @@ const (
 	QuotaGlobal = 1
 	HitChars    = 600
 	Version     = "0.1.0"
+	// MaxQuery is the longest recall query, in characters; a longer one is cut.
+	MaxQuery = 2000
 )
 
 // Server holds what the tools need. The vector matrix is loaded once and reloaded after a write.
@@ -138,6 +141,9 @@ func budgeted(out string, budget int) string {
 // is no embedder); it is reported once, not per layer. early is a complete answer that needs no more work.
 func (s *Server) recall(ctx context.Context, in RecallIn) (lines []string, warn error, early string) {
 	q := strings.TrimSpace(in.Query)
+	if r := []rune(q); len(r) > MaxQuery {
+		q = string(r[:MaxQuery]) // cut, not an error: a long query still finds what it is about
+	}
 	if q == "" {
 		return nil, nil, "[recall: empty query]"
 	}
@@ -279,6 +285,8 @@ func (s *Server) Stats(ctx context.Context, in StatsIn) string {
 			fmt.Fprintf(&b, "commits: last commit failed (retrying): %v\n", lastErr)
 		case c.Busy():
 			b.WriteString("commits: paused, the repository is in the middle of a merge or rebase\n")
+		case c.Detached():
+			b.WriteString("commits: paused, HEAD is detached; check out a branch\n")
 		default:
 			fmt.Fprintf(&b, "commits: ok (%d made since start)\n", commits)
 		}
@@ -351,7 +359,7 @@ func projArgs(p string) []any {
 type LearnIn struct {
 	Text       string `json:"text" jsonschema:"one learning, a sentence or two (cut at 500 characters)"`
 	Project    string `json:"project,omitempty" jsonschema:"project name; empty means global"`
-	Kind       string `json:"kind" jsonschema:"module:topic, for example rag:gotcha; decides where the note is merged later"`
+	Kind       string `json:"kind,omitempty" jsonschema:"optional short label such as topic:type, for example rag:gotcha (default learning); informational only, it does not decide where the note is merged"`
 	Supersedes string `json:"supersedes,omitempty" jsonschema:"short id (or unique prefix) of the note this one replaces"`
 }
 type FactIn struct {
@@ -383,7 +391,7 @@ func (s *Server) Handler() http.Handler {
 			func(ctx context.Context, _ *mcp.CallToolRequest, in RecallIn) (*mcp.CallToolResult, any, error) {
 				return text(s.Recall(ctx, in))
 			})
-		mcp.AddTool(m, &mcp.Tool{Name: "learn", Description: "Store one learning (not routine actions). Idempotent: the same text returns the same id."},
+		mcp.AddTool(m, &mcp.Tool{Name: "learn", Description: "Store one learning (not routine actions). Idempotent: the same text returns the same id. kind is an optional short label such as topic:type; it is informational only and does not decide where the note is merged."},
 			func(ctx context.Context, _ *mcp.CallToolRequest, in LearnIn) (*mcp.CallToolResult, any, error) {
 				id, err := s.St.Learn(ctx, in.Text, in.Project, in.Kind, in.Supersedes)
 				if err != nil {
@@ -436,10 +444,28 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", mcp.NewStreamableHTTPHandler(build, &mcp.StreamableHTTPOptions{SessionTimeout: 30 * time.Minute}))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		if !loopbackHost(r.Host) { // the same check as /mcp: a page in a browser must not read the stats of this machine
+			http.Error(w, "forbidden host", http.StatusForbidden)
+			return
+		}
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		fmt.Fprintln(w, s.Stats(r.Context(), StatsIn{}))
 	})
 	return mux
+}
+
+// loopbackHost says whether a Host header names this machine: localhost, 127.x.x.x or ::1, with or without a port.
+func loopbackHost(hostport string) bool {
+	host := hostport
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		host = h
+	}
+	host = strings.Trim(host, "[]")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 var noiseLine = regexp.MustCompile(`^\[(global )?(wiki|memory|fact)(:| unavailable)`)

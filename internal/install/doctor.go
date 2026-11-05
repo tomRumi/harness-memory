@@ -148,6 +148,10 @@ func doctorRepoState(repo string, line func(level, what, detail string)) {
 			return
 		}
 	}
+	if _, err := os.Stat(g); err == nil && exec.Command("git", "-C", repo, "symbolic-ref", "-q", "HEAD").Run() != nil {
+		line("WARN", "commits", "HEAD is detached; commits pause until a branch is checked out")
+		return
+	}
 	out, err := exec.Command("git", "-C", repo, "diff", "--cached", "--name-only", "-z").Output()
 	if err != nil {
 		line("FAIL", "commits", "git diff --cached failed: "+err.Error())

@@ -19,7 +19,7 @@ func gitLog(t *testing.T, repo string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
-func TestCommitterUsesTheMessageOfTheLastNotifyThatCarriesOne(t *testing.T) {
+func TestCommitterKeepsEveryMessageSubjectFirst(t *testing.T) {
 	st, _, repo := newStore(t)
 	c := st.Commit
 	os.WriteFile(filepath.Join(repo, "notes", "a.md"), []byte("a\n"), 0o644)
@@ -27,10 +27,13 @@ func TestCommitterUsesTheMessageOfTheLastNotifyThatCarriesOne(t *testing.T) {
 	os.WriteFile(filepath.Join(repo, "notes", "c.md"), []byte("c\n"), 0o644)
 	c.NotifyMsg("first message", "notes/a.md")
 	c.NotifyMsg("second message", "notes/b.md")
-	c.Notify("notes/c.md") // no message: the earlier one stays
+	c.Notify("notes/c.md") // no message: the earlier ones stay
 	c.Flush()
-	if got := gitLog(t, repo, "log", "--format=%s"); got != "second message" {
+	if got := gitLog(t, repo, "log", "--format=%s"); got != "first message" {
 		t.Fatalf("subject %q", got)
+	}
+	if body := gitLog(t, repo, "log", "--format=%b"); !strings.Contains(body, "second message") {
+		t.Fatalf("the second message is lost: %q", body)
 	}
 	if gitLog(t, repo, "rev-list", "--count", "HEAD") != "1" {
 		t.Fatal("one commit expected")

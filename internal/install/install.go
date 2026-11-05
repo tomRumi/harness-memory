@@ -113,7 +113,7 @@ func firstLine(err error) string { return strings.TrimSpace(strings.SplitN(err.E
 
 // prepare makes the directories, the .gitignore, the git repository and the index; each only if missing.
 func prepare(p Paths, out io.Writer) error {
-	for _, d := range []string{"wiki", "notes", "facts", "raw"} {
+	for _, d := range []string{"wiki", "notes", "facts"} {
 		if err := os.MkdirAll(filepath.Join(p.Repo, d), 0o755); err != nil {
 			return err
 		}
