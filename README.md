@@ -18,7 +18,7 @@ any time; a rebuild gives the same state hash, and a hand edit to one file chang
 
 ## What works today
 
-- `hms init`, `doctor`, `wiki`, `rescan`, `recall`, `embed`, `stats`, `hash`, `digests`, `bench`, `serve`.
+- `hms init`, `doctor`, `wiki`, `curate`, `rescan`, `recall`, `embed`, `stats`, `hash`, `digests`, `bench`, `serve`.
 - Seven MCP tools: `recall`, `learn`, `wiki_read`, `fact_add`, `retire`, `feedback`, `stats`.
 - `recall` searches three layers: `wiki`, `memory` (notes and facts) and `fact`; the default asks wiki and memory.
   Keyword search and vector search (on by default) fused by rank.
@@ -64,11 +64,54 @@ Text with [[Another Page]], [[Another Page|shown text]], [[Another Page#Heading]
   `- [[Title]] - <summary or first sentence>` per page, sorted by title, never listing itself. The file is written and
   committed only when its content changed. It is a normal page for search.
 
+## Curation: merging notes into wiki pages
+
+The service has no model of its own. A job in any harness asks for a batch, has its model place the notes, and hands
+the pages back; the service checks them and writes them. The built-in model call (`-apply`) does the same with any
+OpenAI-compatible server.
+
+| Command | What it does |
+|---|---|
+| `hms curate` | per project: how many notes wait and the age of the oldest (reads files only) |
+| `hms curate -pending [-p P] [-max N]` | prints the batches as indented JSON: per project up to N (default 40) oldest notes |
+| `hms curate -submit FILE\|- [-p P]` | reads a submission (or a bare model answer with `-p`), checks and writes it, prints the report; exit 1 on an error |
+| `hms curate -apply [-p P] [-max N]` | per batch: pending, the built-in model (`HMS_LLM_URL`, `HMS_LLM_MODEL`, optional `HMS_LLM_KEY`, `HMS_LLM_TIMEOUT` seconds, default 180), submit. A model error or an answer that is not JSON leaves the notes pending |
+
+```
+batch      {"project", "notes":[{"id","text"}], "pages":[{"title","summary","path"}],
+            "related":[{"title","hash","body"}], "prompt"}
+answer     {"pages":[{"title","summary","tags":[...],"body","notes":[ids],"base_hash"}]}
+submission {"project", "pages":[...]}          (the answer plus the project)
+```
+
+`pages` lists every page of the project except `Index`; `related` holds up to five existing pages most like the notes
+(under 40,000 bytes each) with the sha256 `hash` of the file. The model returns the whole new body of each changed page
+and copies `hash` into `base_hash` (empty for a new page). The service writes the frontmatter: a new page gets title,
+summary, tags and `sources`; an existing page keeps its frontmatter except that `summary` is replaced when given,
+`tags` are united and one `sources` entry `<date>: <short note ids>` is added. Each note goes to at most one page (twice
+is an error and nothing is written); unknown ids are ignored and reported.
+
+For each page, in order: the title must be valid (and not `Index` or `Unsorted`); a page whose file changed since the
+batch (hash differs), or whose new title already exists, is **stale** and its notes stay pending; then the check below.
+A page that passes is written and its notes are deleted. A page that fails is not written; its notes are appended to
+the page `Unsorted` as bullets `- <text> (<date>, <short id>)`, then deleted. Notes no page took stay pending. Then the
+`Index` page is regenerated, notes that five sessions rated unhelpful are deleted, and **one commit** records it all
+(`curate <project>: <n> notes into <m> pages (<k> to Unsorted)`). A merge or rebase in progress refuses the submit.
+
+The check (`curate.CheckPage`) counts and compares; it does not judge meaning:
+
+| Rule | Passes when |
+|---|---|
+| insert only | every non-blank line of the old body is in the new body, same order (white space collapsed) |
+| each note | a run of 8 consecutive words of the note (case, punctuation and list markers ignored) is in the new body; a note under 8 words is in it whole |
+| numbers | every number of the note (list numbers at line start ignored; `80` is not `8080`) is in the section of the new body where the note's run was found |
+| links | every `[[link]]` resolves to a page, or to a page created in the same submission |
+| fences | the number of lines starting with three backticks is even |
+| length | not shorter than the old body; at most old + 3 x the notes' length + 2,000 characters |
+
 ## Not built yet
 
-The merge of notes into wiki pages
-(the old merge commands were removed; `internal/gate` and `internal/curate` hold parts for the new one), related-page
-and duplicate detection, and the recipes for harness jobs.
+Related-page and duplicate detection as a feature, and the recipes for harness jobs.
 
 ## Install (from source)
 
