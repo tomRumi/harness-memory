@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/tomRumi/harness-memory-service/internal/wiki"
 )
 
 // Committer is the only thing that runs git commit in the memory repository. Writers call Notify with the files they
@@ -213,7 +215,7 @@ func (c *Committer) commit(snap []string, msg string) (err error) {
 	}()
 	var add, gone []string
 	for _, p := range snap {
-		if !strings.HasPrefix(p, "notes/") && !strings.HasPrefix(p, "facts/") && !strings.HasPrefix(p, "wiki/") {
+		if !wiki.InTree(p) {
 			continue
 		}
 		if _, err := os.Stat(filepath.Join(c.repo, filepath.FromSlash(p))); err == nil {
@@ -247,7 +249,7 @@ func (c *Committer) commit(snap []string, msg string) (err error) {
 		return nil
 	}
 	for _, f := range strings.Split(staged, "\x00") {
-		if f != "" && !strings.HasPrefix(f, "notes/") && !strings.HasPrefix(f, "facts/") && !strings.HasPrefix(f, "wiki/") {
+		if f != "" && !wiki.InTree(f) {
 			// the owner has staged something else; committing now would sweep it into a memory commit
 			return fmt.Errorf("not committing: %q is staged and is not a note, a fact or a wiki entry", f)
 		}
@@ -302,7 +304,7 @@ func (c *Committer) Sweep() {
 			return // nothing is noted when git cannot list the whole set
 		}
 		for _, f := range strings.Split(out, "\x00") {
-			if f != "" && strings.HasSuffix(f, ".md") && !strings.HasPrefix(filepath.Base(f), ".") {
+			if f != "" && wiki.IsMemoryPath(f) {
 				rels = append(rels, f)
 			}
 		}
@@ -314,9 +316,9 @@ func (c *Committer) Sweep() {
 
 // CleanTemp removes temporary files of an interrupted write that are older than an hour.
 func CleanTemp(repo string) {
-	for _, d := range []string{"notes", "facts", "wiki"} {
+	for _, d := range wiki.Trees {
 		filepath.WalkDir(filepath.Join(repo, d), func(p string, e os.DirEntry, err error) error {
-			if err == nil && !e.IsDir() && strings.HasPrefix(e.Name(), ".tmp-") {
+			if err == nil && !e.IsDir() && strings.HasPrefix(e.Name(), wiki.TempPrefix) {
 				if fi, err := e.Info(); err == nil && time.Since(fi.ModTime()) > time.Hour {
 					os.Remove(p)
 				}

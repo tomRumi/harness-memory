@@ -76,16 +76,16 @@ func gather(repo string) (cands []cand, warns []string, keep []string, err error
 				return nil
 			}
 			if d.IsDir() {
-				if path != root && strings.HasPrefix(d.Name(), ".") { // .obsidian, .trash, .git ...
+				if path != root && wiki.Hidden(d.Name()) { // .obsidian, .trash, .git ...
 					return filepath.SkipDir
 				}
 				return nil
 			}
-			if !d.Type().IsRegular() || !strings.HasSuffix(d.Name(), ".md") || strings.HasPrefix(d.Name(), ".") { // a symlink could point outside the repository
-				return nil
-			}
 			inside, _ := filepath.Rel(root, path)
 			rel := kind + "/" + filepath.ToSlash(inside)
+			if !wiki.IsMemoryFile(rel, d.Type()) {
+				return nil
+			}
 			cands = append(cands, cand{id: strings.TrimSuffix(rel, ".md"), kind: kind, rel: rel, abs: path})
 			return nil
 		})

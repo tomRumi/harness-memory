@@ -164,7 +164,7 @@ func writeFile(path string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
+	tmp, err := os.CreateTemp(filepath.Dir(path), wiki.TempPrefix+"*")
 	if err != nil {
 		return err
 	}

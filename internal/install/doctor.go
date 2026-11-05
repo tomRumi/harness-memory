@@ -13,6 +13,7 @@ import (
 	"github.com/tomRumi/harness-memory-service/internal/embed"
 	"github.com/tomRumi/harness-memory-service/internal/index"
 	"github.com/tomRumi/harness-memory-service/internal/store"
+	"github.com/tomRumi/harness-memory-service/internal/wiki"
 )
 
 // Doctor runs the checks, prints one line each (OK, WARN or FAIL) and changes nothing. It returns the number of FAILs.
@@ -170,7 +171,7 @@ func doctorRepoState(repo string, line func(level, what, detail string)) {
 	}
 	var foreign []string
 	for _, f := range strings.Split(out, "\x00") {
-		if f != "" && !strings.HasPrefix(f, "notes/") && !strings.HasPrefix(f, "facts/") && !strings.HasPrefix(f, "wiki/") {
+		if f != "" && !wiki.InTree(f) {
 			foreign = append(foreign, f)
 		}
 	}

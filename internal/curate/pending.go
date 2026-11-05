@@ -71,7 +71,7 @@ type waitingNote struct {
 // usableID says whether a note file stem can be a note id: not empty, not hidden, and without a path separator or a
 // control character. Pending and Submit use this one rule, so a note that is handed out can be taken back.
 func usableID(stem string) bool {
-	if stem == "" || strings.HasPrefix(stem, ".") || strings.ContainsAny(stem, "/\\") {
+	if stem == "" || wiki.Hidden(stem) || strings.ContainsAny(stem, "/\\") {
 		return false
 	}
 	for _, r := range stem {
@@ -94,7 +94,7 @@ func SkippedNotes(repo, project string) int {
 		ents, _ := os.ReadDir(filepath.Join(repo, "notes", p))
 		for _, e := range ents {
 			name := e.Name()
-			if !e.IsDir() && strings.HasSuffix(name, ".md") && !strings.HasPrefix(name, ".") && !usableID(strings.TrimSuffix(name, ".md")) {
+			if wiki.IsMemoryFile("notes/"+p+"/"+name, e.Type()) && !usableID(strings.TrimSuffix(name, ".md")) {
 				n++
 			}
 		}
@@ -115,10 +115,7 @@ func readNotes(repo, project string) ([]waitingNote, error) {
 	var out []waitingNote
 	for _, e := range ents {
 		name := e.Name()
-		if e.IsDir() || !strings.HasSuffix(name, ".md") || strings.HasPrefix(name, ".") {
-			continue
-		}
-		if !usableID(strings.TrimSuffix(name, ".md")) {
+		if !wiki.IsMemoryFile("notes/"+project+"/"+name, e.Type()) || !usableID(strings.TrimSuffix(name, ".md")) {
 			continue
 		}
 		raw, err := os.ReadFile(filepath.Join(dir, name))
@@ -195,19 +192,16 @@ func pageFiles(repo, project string) ([]PageRef, error) {
 		}
 		name := e.Name()
 		if e.IsDir() {
-			if p != root && strings.HasPrefix(name, ".") {
+			if p != root && wiki.Hidden(name) {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if !strings.HasSuffix(name, ".md") || strings.HasPrefix(name, ".") {
-			return nil
-		}
-		title := strings.TrimSuffix(name, ".md")
-		if wiki.Fold(title) == wiki.Fold(wiki.IndexTitle) {
-			return nil
-		}
 		rel, _ := filepath.Rel(repo, p)
+		title := strings.TrimSuffix(name, ".md")
+		if !wiki.IsMemoryFile(filepath.ToSlash(rel), e.Type()) || wiki.Fold(title) == wiki.Fold(wiki.IndexTitle) {
+			return nil
+		}
 		out = append(out, PageRef{Title: title, Path: filepath.ToSlash(rel)})
 		return nil
 	})
@@ -219,18 +213,6 @@ func pageFiles(repo, project string) ([]PageRef, error) {
 		return out[i].Path < out[j].Path
 	})
 	return out, err
-}
-
-// findPage returns the page of the project whose title is title, ignoring case and Unicode normalisation (a file
-// system may not tell "Ports" from "ports", or an accent written in one piece from the same written in two).
-func findPage(repo, project, title string) (PageRef, bool) {
-	ps, _ := pageFiles(repo, project)
-	for _, p := range ps {
-		if wiki.Fold(p.Title) == wiki.Fold(title) {
-			return p, true
-		}
-	}
-	return PageRef{}, false
 }
 
 // listPages is pageFiles with the summary of each page.

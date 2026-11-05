@@ -2,9 +2,12 @@ package index
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/tomRumi/harness-memory-service/internal/wiki"
 )
 
 // Upsert re-reads one markdown file of the repository (rel is its path under the repository, for example
@@ -12,12 +15,18 @@ import (
 // a write, where a full rescan would read every file.
 func (d *DB) Upsert(repo, rel string) error {
 	rel = filepath.ToSlash(rel)
-	kind := strings.SplitN(rel, "/", 2)[0]
-	if (kind != "wiki" && kind != "notes" && kind != "facts") || !strings.HasSuffix(rel, ".md") {
+	if !wiki.InTree(rel) || !strings.HasSuffix(rel, ".md") {
 		return fmt.Errorf("not an indexable memory file: %s", rel)
 	}
+	kind := strings.SplitN(rel, "/", 2)[0]
 	id := strings.TrimSuffix(rel, ".md")
-	raw, err := os.ReadFile(filepath.Join(repo, rel))
+	var raw []byte
+	fi, err := os.Lstat(filepath.Join(repo, rel))
+	if err == nil && !wiki.IsMemoryFile(rel, fi.Mode()) {
+		err = fs.ErrNotExist // a hidden file, a link or a folder is no memory file, as Rescan sees it: the entry goes
+	} else if err == nil {
+		raw, err = os.ReadFile(filepath.Join(repo, rel))
+	}
 	tx, terr := d.Begin()
 	if terr != nil {
 		return terr
