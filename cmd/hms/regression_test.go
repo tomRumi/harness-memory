@@ -14,12 +14,12 @@ import (
 	"github.com/tomRumi/harness-memory-service/internal/curate"
 )
 
-// Item 5: -p must be lower-case; nothing named PROJ is ever made.
-func TestCurateRefusesAnUpperCaseProject(t *testing.T) {
+// Item 5: -p PROJ means proj; nothing named PROJ is ever made.
+func TestCurateLowerCasesAnUpperCaseProject(t *testing.T) {
 	home, repo, _ := curateFixture(t)
 	for _, args := range [][]string{{"curate", "-p", "PROJ"}, {"curate", "-pending", "-p", "PROJ"}, {"curate", "-submit", "-", "-p", "PROJ"}, {"wiki", "index", "-p", "PROJ"}} {
 		_, e, c := hms(t, home, deadURL(), noModel, `{"pages":[{"title":"A","body":"x","notes":[]}]}`, args...)
-		if c == 0 || !strings.Contains(e, "project names are lower-case: proj") {
+		if strings.Contains(e, "invalid project") || strings.Contains(e, "lower-case") {
 			t.Errorf("%v: %d %q", args, c, e)
 		}
 	}

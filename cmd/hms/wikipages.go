@@ -37,6 +37,9 @@ func wikiPagesCmd(p paths, args []string, stdout, stderr io.Writer) int {
 		}
 		page, rest = fs.Arg(0), fs.Args()[1:]
 	}
+	if !projectArg(proj, stderr) {
+		return 2
+	}
 	switch {
 	case sub == "related" && page == "":
 		fmt.Fprintln(stderr, "usage: hms wiki related <title or path> [-n 5] [-p project]")

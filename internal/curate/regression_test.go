@@ -8,16 +8,16 @@ import (
 	"testing"
 )
 
-// Item 5: the project is validated like the store does; no wiki/PROJ is ever made.
-func TestUpperCaseProjectIsRefusedByPendingAndSubmit(t *testing.T) {
+// Item 5: the project rule lower-cases (PROJ means proj); no wiki/PROJ is ever made.
+func TestUpperCaseProjectIsLowerCasedByPendingAndSubmit(t *testing.T) {
 	st, repo := newStore(t)
 	ns := learnN(t, st, proj, 1, tmplWorker)
-	if _, err := Pending(context.Background(), st, "PROJ", 0); err == nil || err.Error() != "project names are lower-case: proj" {
-		t.Fatalf("pending: %v", err)
+	if bs, err := Pending(context.Background(), st, "PROJ", 0); err != nil || len(bs) != 1 || bs[0].Project != proj {
+		t.Fatalf("pending: %v %+v", err, bs)
 	}
-	_, err := Submit(context.Background(), st, Submission{Project: "PROJ", Pages: []Page{{Title: "W", Body: bullets(ns), Notes: ids(ns)}}})
-	if err == nil || err.Error() != "project names are lower-case: proj" {
-		t.Fatalf("submit: %v", err)
+	rep, err := Submit(context.Background(), st, Submission{Project: "PROJ", Pages: []Page{{Title: "W", Body: "# W\n\n" + bullets(ns), Notes: ids(ns)}}})
+	if err != nil || rep.Project != proj || rep.Merged != 1 {
+		t.Fatalf("submit: %v %+v", err, rep)
 	}
 	for _, d := range []string{"wiki", "notes"} { // exact names: Stat("PROJ") succeeds for proj on a case-insensitive file system
 		ents, _ := os.ReadDir(filepath.Join(repo, d))
@@ -27,8 +27,8 @@ func TestUpperCaseProjectIsRefusedByPendingAndSubmit(t *testing.T) {
 			}
 		}
 	}
-	if noteCount(t, st, proj) != 1 {
-		t.Fatal("the note was touched")
+	if !exists(st, "wiki/proj/W.md") {
+		t.Fatal("the page is not under wiki/proj")
 	}
 	if _, err := Pending(context.Background(), st, "../x", 0); err == nil {
 		t.Fatal("path accepted")

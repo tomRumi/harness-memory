@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/tomRumi/harness-memory-service/internal/index"
+	"github.com/tomRumi/harness-memory-service/internal/wiki"
 )
 
 // hung is an embedder that never answers until its context ends.
@@ -314,18 +315,18 @@ func TestLearnRefusesATextWithNoLetterOrDigit(t *testing.T) {
 	}
 }
 
-// Item 5: the exported rule.
-func TestValidProjectRefusesCapitals(t *testing.T) {
-	if p, err := ValidProject("proj"); err != nil || p != "proj" {
+// Item 5: the one project rule lower-cases (wiki.Project); the store reads no project as global.
+func TestProjectRuleLowerCasesAndNoProjectIsGlobal(t *testing.T) {
+	if p, err := wiki.Project("PROJ"); err != nil || p != "proj" {
 		t.Fatal(p, err)
 	}
-	if p, err := ValidProject(""); err != nil || p != GlobalProject {
+	if p, err := project(""); err != nil || p != GlobalProject {
 		t.Fatal(p, err)
 	}
-	if _, err := ValidProject("PROJ"); err == nil || err.Error() != "project names are lower-case: proj" {
-		t.Fatal(err)
+	if _, err := wiki.Project(""); err == nil {
+		t.Fatal("an empty name is not a project")
 	}
-	if _, err := ValidProject("../x"); err == nil {
+	if _, err := wiki.Project("../x"); err == nil {
 		t.Fatal("path accepted")
 	}
 }

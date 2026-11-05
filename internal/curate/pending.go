@@ -238,12 +238,12 @@ func Pending(ctx context.Context, st *store.Store, project string, max int) ([]B
 		max = DefaultMax
 	}
 	projects := noteProjects(st.Repo)
+	project, err := wiki.OptionalProject(project)
+	if err != nil {
+		return nil, err
+	}
 	if project != "" {
-		p, err := store.ValidProject(project)
-		if err != nil {
-			return nil, err
-		}
-		projects = []string{p}
+		projects = []string{project}
 	}
 	var out []Batch
 	for _, p := range projects {

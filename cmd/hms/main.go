@@ -25,6 +25,7 @@ import (
 	"github.com/tomRumi/harness-memory-service/internal/install"
 	"github.com/tomRumi/harness-memory-service/internal/server"
 	"github.com/tomRumi/harness-memory-service/internal/store"
+	"github.com/tomRumi/harness-memory-service/internal/wiki"
 )
 
 const usage = `hms: markdown-backed memory with a rebuildable index
@@ -86,6 +87,18 @@ func resolve(home, repo, db string) paths {
 	return paths{home, repo, db}
 }
 
+// projectArg applies the project rule to a -p value in place (empty: all projects). It prints why and says false when
+// the name cannot be a project.
+func projectArg(v *string, stderr io.Writer) bool {
+	p, err := wiki.OptionalProject(*v)
+	if err != nil {
+		fmt.Fprintf(stderr, "hms: %v\n", err)
+		return false
+	}
+	*v = p
+	return true
+}
+
 func die(format string, a ...any) {
 	fmt.Fprintf(os.Stderr, "hms: "+format+"\n", a...)
 	os.Exit(1)
@@ -143,6 +156,9 @@ func main() {
 		format := fs.String("format", "text", "text, or context for a harness hook (see -hook)")
 		hook := fs.Bool("hook", false, "with -format=context: read a UserPromptSubmit payload (JSON with prompt) on standard input")
 		fs.Parse(rest)
+		if !projectArg(proj, os.Stderr) {
+			os.Exit(2)
+		}
 		if *format == "context" {
 			os.Exit(recallContext(p, *proj, *hook, strings.Join(fs.Args(), " "), *withVec, os.Stdin, os.Stdout, os.Stderr))
 		}
@@ -459,13 +475,8 @@ func wikiCmd(p paths, args []string, stdout, stderr io.Writer) (code int) {
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
 	}
-	if *proj != "" {
-		pn, err := store.ValidProject(*proj)
-		if err != nil {
-			fmt.Fprintf(stderr, "hms: %v\n", err)
-			return 2
-		}
-		*proj = pn
+	if !projectArg(proj, stderr) {
+		return 2
 	}
 	d, err := index.Open(p.db)
 	if err != nil {
@@ -556,13 +567,8 @@ func curateCmd(p paths, args []string, stdin io.Reader, stdout, stderr io.Writer
 		fmt.Fprintln(stderr, "usage: hms curate | hms curate -pending [-p P] [-max N] | hms curate -submit FILE|- [-p P] | hms curate -apply [-p P] [-max N]")
 		return 2
 	}
-	if *proj != "" { // the same rule as the store: lower-case names; no wiki/PROJ is ever made
-		pn, err := store.ValidProject(*proj)
-		if err != nil {
-			fmt.Fprintf(stderr, "hms: %v\n", err)
-			return 2
-		}
-		*proj = pn
+	if !projectArg(proj, stderr) {
+		return 2
 	}
 	if modes == 0 { // read only: files, no index
 		ws, err := curate.WaitingNotes(p.repo)

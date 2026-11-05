@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -36,8 +35,6 @@ const (
 
 // ErrHandWritten is returned by the index page writers when the project's Index.md is not the generated one.
 var ErrHandWritten = errors.New("Index.md is hand-written; left alone")
-
-var slugRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 
 // Store is the write side. Writes are serialised by a mutex, so concurrent callers queue instead of failing.
 type Store struct {
@@ -133,30 +130,12 @@ func (s *Store) lockWrite() (func(), error) {
 	return func() { unlock(); s.mu.Unlock() }, nil
 }
 
-// Project normalises a project name the way every write does (trimmed, lower case; empty is the global project) and
-// refuses a name that cannot be a directory.
-func Project(p string) (string, error) { return project(p) }
-
-// ValidProject is Project for callers that must not guess: a name with capitals is refused, not lower-cased.
-func ValidProject(p string) (string, error) {
-	p = strings.TrimSpace(p)
-	if l, err := project(p); err != nil {
-		return "", err
-	} else if p != "" && l != p {
-		return "", fmt.Errorf("project names are lower-case: %s", l)
-	}
-	return project(p)
-}
-
+// project is the project of a write: the project rule (wiki.Project); no name means the global project.
 func project(p string) (string, error) {
-	p = strings.ToLower(strings.TrimSpace(p))
-	if p == "" {
+	if strings.TrimSpace(p) == "" {
 		return GlobalProject, nil
 	}
-	if !slugRe.MatchString(p) {
-		return "", fmt.Errorf("invalid project name %q (lower-case letters, digits, dot, dash, underscore)", p)
-	}
-	return p, nil
+	return wiki.Project(p)
 }
 
 // writeFile writes atomically: a reader never sees half a note.
@@ -421,14 +400,12 @@ func (s *Store) resolve(prefix, proj string) (id string, msg string) {
 // Retire deletes a note or fact. The file is removed and the node leaves the index; the committer records the
 // deletion, so git history keeps the text.
 func (s *Store) Retire(ctx context.Context, prefix, reason, proj string) (string, error) {
-	if proj != "" {
-		var err error
-		if proj, err = project(proj); err != nil {
-			return "", err
-		}
+	proj, err := wiki.OptionalProject(proj)
+	if err != nil {
+		return "", err
 	}
 	out := ""
-	err := s.Do(func(tx *Tx) error {
+	err = s.Do(func(tx *Tx) error {
 		id, msg := s.resolve(prefix, proj)
 		if msg != "" {
 			out = msg
@@ -486,11 +463,9 @@ func (s *Store) Feedback(prefix string, helpful bool, proj, session string) (str
 	if len(session) > 100 {
 		session = session[:100]
 	}
-	if proj != "" {
-		var err error
-		if proj, err = project(proj); err != nil {
-			return "", err
-		}
+	proj, err := wiki.OptionalProject(proj)
+	if err != nil {
+		return "", err
 	}
 	id, msg := s.resolve(prefix, proj)
 	if msg != "" {
@@ -674,7 +649,7 @@ func (s *Store) WriteIndexPage(ctx context.Context, proj string) (wrote bool, er
 // indexPageLocked builds the index page of a project and says whether it must be written: not when the file already
 // has this content, and never over a hand-written Index.md. The caller holds the write lock.
 func (s *Store) indexPageLocked(proj string) (rel, content string, wrote bool, err error) {
-	if proj == "" || strings.ContainsAny(proj, "/\\") || strings.HasPrefix(proj, ".") {
+	if canon, err := wiki.Project(proj); err != nil || canon != proj { // never a second folder for a name that has capitals
 		return "", "", false, fmt.Errorf("invalid project name %q", proj)
 	}
 	content, err = s.DB.BuildIndexPage(proj)

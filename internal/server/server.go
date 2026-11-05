@@ -15,6 +15,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/tomRumi/harness-memory-service/internal/index"
 	"github.com/tomRumi/harness-memory-service/internal/store"
+	"github.com/tomRumi/harness-memory-service/internal/wiki"
 )
 
 // Quotas per layer for an unrestricted recall, and the cap on one hit's text.
@@ -167,7 +168,10 @@ func (s *Server) recall(ctx context.Context, in RecallIn) (lines []string, warn 
 	default:
 		return nil, nil, fmt.Sprintf("[recall: unknown layer %q — use auto, wiki, memory or fact]", in.Layer)
 	}
-	proj := strings.ToLower(strings.TrimSpace(in.Project))
+	proj, err := wiki.OptionalProject(in.Project)
+	if err != nil {
+		return nil, nil, "[recall: " + err.Error() + "]"
+	}
 	emb := s.Emb // dropped after the first failure: the other layers do not wait for a dead embedder again
 	mat := s.matrix()
 	if emb != nil {
@@ -245,7 +249,10 @@ type StatsIn struct {
 
 // Stats is also the connection health check: it reports the state of every part the other tools depend on.
 func (s *Server) Stats(ctx context.Context, in StatsIn) string {
-	proj := strings.ToLower(strings.TrimSpace(in.Project))
+	proj, err := wiki.OptionalProject(in.Project)
+	if err != nil {
+		return "[stats: " + err.Error() + "]"
+	}
 	st, err := s.DB.Stats()
 	if err != nil {
 		return "[stats unavailable: " + err.Error() + "]"

@@ -95,12 +95,8 @@ func shortOf(id string) string {
 // runs under the store's write lock and ends in one commit. A page that fails the check is not written; its notes go
 // to the Unsorted page as bullets. A stale page and a note that no page took stay pending.
 func Submit(ctx context.Context, st *store.Store, sub Submission) (Report, error) {
-	project := strings.TrimSpace(sub.Project)
-	rep := Report{Project: project, Pages: []PageReport{}, Left: []string{}, Unknown: []string{}, Warnings: []string{}}
-	if project == "" {
-		return rep, fmt.Errorf("invalid project name %q", project)
-	}
-	project, err := store.ValidProject(project) // the same rule as every other write; no wiki/PROJ is ever made
+	rep := Report{Project: strings.TrimSpace(sub.Project), Pages: []PageReport{}, Left: []string{}, Unknown: []string{}, Warnings: []string{}}
+	project, err := wiki.Project(sub.Project) // the same rule as every other write; no wiki/PROJ is ever made
 	if err != nil {
 		return rep, err
 	}
