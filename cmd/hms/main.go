@@ -33,7 +33,7 @@ usage: hms [--home DIR] [--repo DIR] [--db FILE] <command> [arguments]
   rescan                       make the index match the files (changed files only)
   embed [-reset] [-prune]      embed every wiki, note and fact chunk that has no vector yet; safe to stop and rerun
   recall [-p P] [-k K,K] [-n N] [-vectors] [-json] <words...>
-                               keyword recall over active nodes; -vectors (or HMS_VECTORS=1) adds the vector pass
+                               keyword recall; -vectors (or HMS_VECTORS=1) adds the vector pass
   bench <questions.json> ...   recall latency over the questions' texts (query vector cached, then with embedding)
   serve [-addr A] [-vectors]  MCP over HTTP (loopback only) with seven tools: recall learn wiki_read fact_add retire feedback stats
   stats                        node counts by kind and project
@@ -112,12 +112,12 @@ func main() {
 	case "recall":
 		fs := flag.NewFlagSet("recall", flag.ExitOnError)
 		proj := fs.String("p", "", "project")
-		kinds := fs.String("k", "", "kinds, comma separated: wiki,code,note,fact")
+		kinds := fs.String("k", "", "kinds, comma separated: wiki,note,fact")
 		n := fs.Int("n", 5, "number of hits")
 		asJSON := fs.Bool("json", false, "print hits as JSON, with the full text")
 		withVec := fs.Bool("vectors", os.Getenv("HMS_VECTORS") == "1", "add the vector pass (needs `hms embed` and a running model server); also HMS_VECTORS=1")
 		format := fs.String("format", "text", "text, or context for a harness hook (see -hook)")
-		hook := fs.Bool("hook", false, "with -format=context: read a UserPromptSubmit payload (JSON with prompt and cwd) on standard input")
+		hook := fs.Bool("hook", false, "with -format=context: read a UserPromptSubmit payload (JSON with prompt) on standard input")
 		fs.Parse(rest)
 		if *format == "context" {
 			os.Exit(recallContext(p, *proj, *hook, strings.Join(fs.Args(), " "), *withVec))
@@ -315,7 +315,7 @@ func main() {
 			emb = embed.New(embed.Default())
 			hc, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			if _, err := emb.Health(hc); err != nil {
-				fmt.Fprintf(os.Stderr, "hms: embedder not reachable (%v): starting with keyword match only; writes will be refused until it is back\n", err)
+				fmt.Fprintf(os.Stderr, "hms: embedder not reachable (%v): starting with keyword match only; writes still work and recall uses keywords only\n", err)
 			}
 			cancel()
 		}
@@ -410,10 +410,6 @@ func cmdInit(p paths) {
 	if _, err := os.Stat(gi); os.IsNotExist(err) {
 		os.WriteFile(gi, []byte("*.db\n*.db-shm\n*.db-wal\n"), 0o644)
 	}
-	pj := filepath.Join(p.repo, "projects.yaml")
-	if _, err := os.Stat(pj); os.IsNotExist(err) {
-		os.WriteFile(pj, []byte("# projects whose source code is indexed as the code layer\nprojects: []\n"), 0o644)
-	}
 	if _, err := os.Stat(filepath.Join(p.repo, ".git")); os.IsNotExist(err) {
 		if out, err := exec.Command("git", "-C", p.repo, "init", "-q", "-b", "main").CombinedOutput(); err != nil {
 			fmt.Fprintf(os.Stderr, "hms: git init failed (%v): %s\n", err, out)
@@ -455,16 +451,12 @@ func recallContext(p paths, proj string, hook bool, query string, vectors bool) 
 	if hook {
 		var in struct {
 			Prompt string `json:"prompt"`
-			Cwd    string `json:"cwd"`
 		}
 		if err := json.NewDecoder(io.LimitReader(os.Stdin, 4<<20)).Decode(&in); err != nil {
 			fmt.Fprintln(os.Stderr, "hms: hook payload not read:", err)
 			return 0
 		}
 		query = in.Prompt
-		if proj == "" {
-			proj = projectOfDir(p.repo, in.Cwd)
-		}
 	}
 	if r := []rune(strings.TrimSpace(query)); len(r) > 400 {
 		query = string(r[:400])
@@ -504,41 +496,4 @@ func recallContext(p paths, proj string, hook bool, query string, vectors bool) 
 		fmt.Fprintln(os.Stderr, "hms: recall took longer than", ContextTimeout, "- skipped")
 	}
 	return 0
-}
-
-// projectOfDir names the project whose code root contains dir, or "" when none does.
-func projectOfDir(repo, dir string) string {
-	if dir == "" {
-		return ""
-	}
-	if r, err := filepath.EvalSymlinks(dir); err == nil {
-		dir = r
-	}
-	projects, err := index.LoadProjects(repo)
-	if err != nil {
-		return ""
-	}
-	best, bestLen := "", -1
-	for _, pr := range projects {
-		for _, root := range pr.CodeRoots {
-			if r, err := filepath.EvalSymlinks(root); err == nil {
-				root = r
-			}
-			if (dir == root || strings.HasPrefix(dir, root+string(filepath.Separator))) && len(root) > bestLen {
-				best, bestLen = pr.Name, len(root) // the innermost root wins
-			}
-		}
-	}
-	return best
-}
-
-// openStore opens the index and a store without an embedder, for commands that write notes and entries. The returned
-// function makes the last commit and closes everything.
-func openStore(p paths) (*store.Store, func()) {
-	d := open(p)
-	st, err := store.New(p.repo, d, nil, store.NewCommitter(p.repo, 3*time.Second), filepath.Join(p.home, "events.db"))
-	if err != nil {
-		die("%v", err)
-	}
-	return st, func() { st.Close(); d.Close() }
 }

@@ -9,21 +9,20 @@ import (
 
 // Hit is one chunk returned by recall.
 type Hit struct {
-	ChunkID                                            int64
-	NodeID, Kind, Project, Path, Section, Text, Status string
-	Score                                              float64
+	ChunkID                                    int64
+	NodeID, Kind, Project, Path, Section, Text string
+	Score                                      float64
 }
 
 // WeightMeta is the weight of a match in a node's title or path, against 1.0 for a match in the text. Frozen with the
 // other retrieval settings (see vectors.go).
 const WeightMeta = 0.5
 
-// Filter narrows a recall. Empty fields mean "any". Only active nodes are ever returned.
+// Filter narrows a recall. Empty fields mean "any".
 type Filter struct {
-	Project     string
-	Kinds       []string
-	Limit       int
-	AllStatuses bool // include archived, superseded and retired nodes (keyword pass only)
+	Project string
+	Kinds   []string
+	Limit   int
 }
 
 var word = regexp.MustCompile(`[\p{L}\p{M}\p{N}_]+`)
@@ -60,13 +59,10 @@ func (d *DB) Keyword(query string, f Filter) ([]Hit, error) {
 	if f.Limit <= 0 {
 		f.Limit = 5
 	}
-	sqlq := `SELECT c.id, n.id, n.kind, n.project, n.path, c.section, c.text, n.status, bm25(chunks_fts, 1.0, 0.5) AS score
+	sqlq := `SELECT c.id, n.id, n.kind, n.project, n.path, c.section, c.text, bm25(chunks_fts, 1.0, 0.5) AS score
 	  FROM chunks_fts JOIN chunks c ON c.id = chunks_fts.rowid JOIN nodes n ON n.id = c.node_id
 	  WHERE chunks_fts MATCH ?`
 	args := []any{mq}
-	if !f.AllStatuses {
-		sqlq += ` AND n.status = 'active'`
-	}
 	if f.Project != "" {
 		sqlq += ` AND n.project = ?`
 		args = append(args, f.Project)
@@ -87,7 +83,7 @@ func (d *DB) Keyword(query string, f Filter) ([]Hit, error) {
 	var out []Hit
 	for rows.Next() {
 		var h Hit
-		if err := rows.Scan(&h.ChunkID, &h.NodeID, &h.Kind, &h.Project, &h.Path, &h.Section, &h.Text, &h.Status, &h.Score); err != nil {
+		if err := rows.Scan(&h.ChunkID, &h.NodeID, &h.Kind, &h.Project, &h.Path, &h.Section, &h.Text, &h.Score); err != nil {
 			return nil, err
 		}
 		out = append(out, h)

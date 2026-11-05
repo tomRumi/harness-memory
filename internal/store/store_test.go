@@ -122,7 +122,7 @@ func TestLearnIsIdempotentAndWritesAReadableNote(t *testing.T) {
 		t.Fatalf("not idempotent: %s %s, %d files", id1, id2, countFiles(t, filepath.Join(repo, "notes")))
 	}
 	raw, _ := os.ReadFile(filepath.Join(repo, "notes", "proj", id1+".md"))
-	for _, want := range []string{"kind: rag:gotcha", "status: active", "created:", "The daemon keeps its state"} {
+	for _, want := range []string{"kind: rag:gotcha", "created:", "The daemon keeps its state"} {
 		if !strings.Contains(string(raw), want) {
 			t.Fatalf("note file lacks %q:\n%s", want, raw)
 		}
@@ -151,18 +151,39 @@ func TestLearnIsIdempotentAndWritesAReadableNote(t *testing.T) {
 	}
 }
 
-func TestNothingIsStoredWhileTheEmbedderIsDown(t *testing.T) {
+func TestLearnSucceedsWhileTheEmbedderIsDown(t *testing.T) {
 	st, e, repo := newStore(t)
 	e.fail.Store(true)
-	if _, err := st.Learn(context.Background(), "A note while the model server is down.", "p", "x", ""); err == nil || !strings.Contains(err.Error(), "nothing was stored") {
-		t.Fatalf("%v", err)
+	id, err := st.Learn(context.Background(), "A note about the glimmerpost relay while the model server is down.", "p", "x", "")
+	if err != nil {
+		t.Fatalf("a write must not fail because of the embedder: %v", err)
 	}
-	if n := countFiles(t, filepath.Join(repo, "notes")); n != 0 {
+	if n := countFiles(t, filepath.Join(repo, "notes")); n != 1 {
 		t.Fatalf("%d files written", n)
 	}
+	if st.EmbedError() == nil {
+		t.Fatal("the embedding error must be kept for stats")
+	}
+	if hits, _ := st.DB.Keyword("glimmerpost relay", index.Filter{Kinds: []string{"note"}}); len(hits) != 1 {
+		t.Fatalf("the note must be searchable by keyword: %+v", hits)
+	}
+	if _, err := st.AddFact(context.Background(), "A fact written while the model server is down.", "p", "", 0); err != nil {
+		t.Fatalf("fact_add while down: %v", err)
+	}
+	st.Commit.Flush()
+	if out, _ := exec.Command("git", "-C", repo, "status", "--porcelain").CombinedOutput(); strings.TrimSpace(string(out)) != "" {
+		t.Fatalf("the notes were not committed while the embedder was down:\n%s", out)
+	}
+	// the embedder comes back: the next write embeds everything that is missing
 	e.fail.Store(false)
-	if _, err := st.Learn(context.Background(), "A note while the model server is down.", "p", "x", ""); err != nil {
-		t.Fatalf("retry: %v", err)
+	if _, err := st.Learn(context.Background(), "A second note about the glimmerpost relay.", "p", "x", ""); err != nil {
+		t.Fatal(err)
+	}
+	if st.EmbedError() != nil {
+		t.Fatalf("error not cleared: %v", st.EmbedError())
+	}
+	if miss, _, _ := st.DB.Pending("bag"); miss != 0 {
+		t.Fatalf("%d chunk texts still without a vector (note %s)", miss, id)
 	}
 }
 
@@ -206,43 +227,115 @@ func TestHundredConcurrentWritesLoseNothing(t *testing.T) {
 	}
 }
 
-func TestSupersedeRetireAndFeedback(t *testing.T) {
+func gitOut(t *testing.T, repo string, args ...string) string {
+	t.Helper()
+	out, err := exec.Command("git", append([]string{"-C", repo}, args...)...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+	return string(out)
+}
+
+func hasNode(hits []index.Hit, id string) bool {
+	for _, h := range hits {
+		if strings.HasSuffix(h.NodeID, id) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestRetireDeletesTheFileAndTheDeletionIsCommitted(t *testing.T) {
+	st, _, repo := newStore(t)
+	ctx := context.Background()
+	id, _ := st.Learn(ctx, "The service listens on port 8765 by default.", "s", "cfg:port", "")
+	st.Commit.Flush()
+	rel := "notes/s/" + id + ".md"
+	if !strings.Contains(gitOut(t, repo, "ls-files"), rel) {
+		t.Fatalf("the note was not committed first")
+	}
+	// unknown and too short ids change nothing
+	for _, bad := range []string{"zzzzzzzz", "ab"} {
+		out, err := st.Retire(ctx, bad, "x", "")
+		if err != nil || !strings.Contains(out, "nothing changed") {
+			t.Fatalf("Retire(%q) = %q, %v", bad, out, err)
+		}
+	}
+	out, err := st.Retire(ctx, id[:8], "wrong after all", "s")
+	if err != nil || !strings.HasPrefix(out, "deleted "+id[:8]) {
+		t.Fatalf("%q %v", out, err)
+	}
+	if _, err := os.Stat(filepath.Join(repo, rel)); !os.IsNotExist(err) {
+		t.Fatalf("the file must be gone: %v", err)
+	}
+	if hits, _ := st.DB.Keyword("port 8765 listens", index.Filter{}); hasNode(hits, id) {
+		t.Fatalf("a deleted note is still returned: %+v", hits)
+	}
+	var n int
+	st.DB.QueryRow(`SELECT count(*) FROM nodes WHERE id=?`, "notes/s/"+id).Scan(&n)
+	if n != 0 {
+		t.Fatal("the node is still in the index")
+	}
+	if out, _ := st.Retire(ctx, id[:8], "again", "s"); !strings.Contains(out, "nothing changed") {
+		t.Fatalf("a second retire must change nothing: %q", out)
+	}
+	st.Commit.Flush()
+	stat := gitOut(t, repo, "log", "--stat", "--format=%s", "-1")
+	if !strings.Contains(stat, rel) || !strings.Contains(stat, "deletion") {
+		t.Fatalf("the last commit must show the deletion:\n%s", stat)
+	}
+	if gitOut(t, repo, "status", "--porcelain") != "" {
+		t.Fatalf("uncommitted changes remain: %s", gitOut(t, repo, "status", "--porcelain"))
+	}
+	// the text is still in history
+	if !strings.Contains(gitOut(t, repo, "log", "-p", "--all", "--", rel), "port 8765") {
+		t.Fatal("git history must keep the text")
+	}
+}
+
+func TestNoteWrittenAndRetiredBeforeAnyCommitLeavesNoError(t *testing.T) {
+	st, _, repo := newStore(t)
+	ctx := context.Background()
+	id, _ := st.Learn(ctx, "A note that is deleted before the committer ever ran.", "q", "k", "")
+	if _, err := st.Retire(ctx, id[:8], "", "q"); err != nil {
+		t.Fatal(err)
+	}
+	st.Commit.Flush()
+	if err := st.Commit.LastErr(); err != nil {
+		t.Fatalf("committer error: %v", err)
+	}
+	if gitOut(t, repo, "status", "--porcelain") != "" {
+		t.Fatal("working tree not clean")
+	}
+}
+
+func TestSupersedesDeletesTheOlderNoteAndTheDeletionIsCommitted(t *testing.T) {
 	st, _, repo := newStore(t)
 	ctx := context.Background()
 	old, _ := st.Learn(ctx, "The service listens on port 8000 by default.", "s", "cfg:port", "")
+	st.Commit.Flush()
+	oldRel := "notes/s/" + old + ".md"
 	res, err := st.Learn(ctx, "The service listens on port 8765 by default.", "s", "cfg:port", old[:8])
 	if err != nil || !strings.Contains(res, "replaced "+old[:8]) {
 		t.Fatalf("%q %v", res, err)
 	}
-	raw, _ := os.ReadFile(filepath.Join(repo, "notes", "s", old+".md"))
-	if !strings.Contains(string(raw), "status: superseded") || !strings.Contains(string(raw), "superseded_by:") {
-		t.Fatalf("old note not marked:\n%s", raw)
-	}
-	hasNode := func(hits []index.Hit, id string) bool {
-		for _, h := range hits {
-			if strings.HasSuffix(h.NodeID, id) {
-				return true
-			}
-		}
-		return false
+	if _, err := os.Stat(filepath.Join(repo, oldRel)); !os.IsNotExist(err) {
+		t.Fatalf("the older note must be deleted: %v", err)
 	}
 	if hits, _ := st.DB.Keyword("port 8000 listens", index.Filter{Kinds: []string{"note"}}); hasNode(hits, old) {
-		t.Fatalf("a superseded note is still returned: %+v", hits)
-	}
-	// unknown, too short and already non-live ids change nothing
-	for _, id := range []string{"zzzzzzzz", "ab", old[:8]} {
-		out, err := st.Retire(ctx, id, "x", "")
-		if err != nil || (!strings.Contains(out, "nothing changed")) {
-			t.Fatalf("Retire(%q) = %q, %v", id, out, err)
-		}
+		t.Fatalf("a replaced note is still returned: %+v", hits)
 	}
 	newID := strings.Fields(res)[0]
-	out, err := st.Retire(ctx, newID[:8], "wrong after all", "s")
-	if err != nil || !strings.HasPrefix(out, "retired "+newID[:8]) {
-		t.Fatalf("%q %v", out, err)
+	if hits, _ := st.DB.Keyword("port 8765 listens", index.Filter{Kinds: []string{"note"}}); !hasNode(hits, newID) {
+		t.Fatalf("the new note is missing: %+v", hits)
 	}
-	if hits, _ := st.DB.Keyword("port 8765 listens", index.Filter{Kinds: []string{"note"}}); hasNode(hits, newID) {
-		t.Fatalf("a retired note is still returned: %+v", hits)
+	st.Commit.Flush()
+	stat := gitOut(t, repo, "log", "--stat", "--format=%s", "-1")
+	if !strings.Contains(stat, oldRel) || !strings.Contains(stat, "deletion") || !strings.Contains(stat, "notes/s/"+newID) {
+		t.Fatalf("one commit must show the new note and the deletion:\n%s", stat)
+	}
+	if gitOut(t, repo, "status", "--porcelain") != "" {
+		t.Fatal("uncommitted changes remain")
 	}
 	// an ambiguous prefix changes nothing
 	a, _ := st.Learn(ctx, "Alpha note about caching layers and expiry times.", "amb", "k", "")
@@ -254,7 +347,7 @@ func TestSupersedeRetireAndFeedback(t *testing.T) {
 	if common >= 4 { // only meaningful when the two ids share a prefix of 4 or more characters
 		out, _ := st.Retire(ctx, a[:common], "", "amb")
 		if !strings.Contains(out, "nothing changed") {
-			t.Fatalf("ambiguous prefix retired something: %q", out)
+			t.Fatalf("ambiguous prefix deleted something: %q", out)
 		}
 	}
 	// feedback
@@ -263,6 +356,22 @@ func TestSupersedeRetireAndFeedback(t *testing.T) {
 	msg, _ := st.Feedback(f1[:8], false, "fb", "s2")
 	if !strings.Contains(msg, "helpful 1, unhelpful 1") {
 		t.Fatalf("%q", msg)
+	}
+}
+
+func TestOldStatusKeysInANoteFileAreIgnored(t *testing.T) {
+	st, _, repo := newStore(t)
+	os.MkdirAll(filepath.Join(repo, "notes", "old"), 0o755)
+	os.WriteFile(filepath.Join(repo, "notes", "old", "aaaa1111-0000-0000-0000-000000000000.md"), []byte("---\nkind: k\nstatus: archived\nsuperseded_by: x\n---\n\nAn archived looking note about the wibblefrost gateway.\n"), 0o644)
+	if _, err := st.DB.Rescan(repo); err != nil {
+		t.Fatal(err)
+	}
+	if hits, _ := st.DB.Keyword("wibblefrost gateway", index.Filter{Kinds: []string{"note"}}); len(hits) != 1 {
+		t.Fatalf("an old status key must not hide the note: %+v", hits)
+	}
+	out, err := st.Retire(context.Background(), "aaaa1111", "", "old")
+	if err != nil || !strings.HasPrefix(out, "deleted ") {
+		t.Fatalf("%q %v", out, err)
 	}
 }
 
@@ -360,7 +469,7 @@ func TestSupersedesIsTrimmedAndNeedsEnoughOfTheId(t *testing.T) {
 		}
 	}
 	var active int
-	st.DB.QueryRow(`SELECT count(*) FROM nodes WHERE kind='note' AND project='s' AND status='active'`).Scan(&active)
+	st.DB.QueryRow(`SELECT count(*) FROM nodes WHERE kind='note' AND project='s'`).Scan(&active)
 	if active != 4 {
 		t.Fatalf("active %d, want 4 (nothing replaced)", active)
 	}
@@ -378,12 +487,11 @@ func TestImportedFactsCanBeRetiredByTheirShortId(t *testing.T) {
 		t.Fatal(err)
 	}
 	msg, err := st.Retire(context.Background(), "00004", "wrong now", "")
-	if err != nil || !strings.Contains(strings.ToLower(msg), "retired") {
+	if err != nil || !strings.HasPrefix(msg, "deleted ") {
 		t.Fatalf("%q %v", msg, err)
 	}
-	raw, _ := os.ReadFile(filepath.Join(repo, "facts", "global", "00004.md"))
-	if !strings.Contains(string(raw), "id: 00004") || !strings.Contains(string(raw), "status: retired") {
-		t.Fatalf("frontmatter after retire:\n%s", raw)
+	if _, err := os.Stat(filepath.Join(repo, "facts", "global", "00004.md")); !os.IsNotExist(err) {
+		t.Fatalf("the fact file must be gone: %v", err)
 	}
 }
 
@@ -485,5 +593,11 @@ func TestRatingsCountSessionsNotCalls(t *testing.T) {
 	st.Feedback(id[:8], false, "fbk", "s1") // and back: the last rating of the session is what counts
 	if c := st.RetireCandidates(); len(c) != 1 {
 		t.Fatalf("last rating per session: %v", c)
+	}
+	if _, err := st.Retire(ctx, id[:8], "rated down", "fbk"); err != nil {
+		t.Fatal(err)
+	}
+	if c := st.RetireCandidates(); len(c) != 0 {
+		t.Fatalf("a deleted note is no candidate: %v", c)
 	}
 }

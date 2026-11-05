@@ -37,7 +37,7 @@ func (d *DB) StateHash() (string, map[string]int, error) {
 		}
 		return rows.Err()
 	}
-	if err := feed("node", `SELECT id,kind,project,path,title,status,retired_reason,superseded_by,pinned,note_kind,created_at,updated_at,content_hash FROM nodes ORDER BY id`, 13); err != nil {
+	if err := feed("node", `SELECT id,kind,project,path,title,pinned,note_kind,created_at,updated_at,content_hash FROM nodes ORDER BY id`, 10); err != nil {
 		return "", nil, err
 	}
 	if err := feed("chunk", `SELECT node_id,seq,section,text_hash FROM chunks ORDER BY node_id,seq`, 4); err != nil {
@@ -83,7 +83,7 @@ func (d *DB) NodeDigests() (map[string]string, error) {
 		}
 		return rows.Err()
 	}
-	if err := scan(`SELECT id,kind,project,path,title,status,retired_reason,superseded_by,pinned,note_kind,created_at,updated_at,content_hash FROM nodes ORDER BY id`, 13, "n"); err != nil {
+	if err := scan(`SELECT id,kind,project,path,title,pinned,note_kind,created_at,updated_at,content_hash FROM nodes ORDER BY id`, 10, "n"); err != nil {
 		return nil, err
 	}
 	if err := scan(`SELECT node_id,seq,section,text_hash FROM chunks ORDER BY node_id,seq`, 4, "c"); err != nil {

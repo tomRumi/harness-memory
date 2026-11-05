@@ -21,30 +21,18 @@ func write(t *testing.T, root, rel, content string) {
 	}
 }
 
-// fixture builds a synthetic memory repository and a synthetic code root. Nothing here is real data.
-func fixture(t *testing.T) (repo, code string) {
+// fixture builds a synthetic memory repository. Nothing here is real data. The note n-0002 still carries the old
+// status keys of earlier versions; they are ignored.
+func fixture(t *testing.T) string {
 	t.Helper()
-	repo, code = t.TempDir(), t.TempDir()
+	repo := t.TempDir()
 	write(t, repo, "wiki/alpha/overview.md", "---\ntitle: Overview\nsupersedes: wiki/alpha/old\n---\n\n# Overview\nThe widget listens on port 8765.\n\n## Install\nRun the installer, see [[Setup]] and [[Other|alias]].\n")
 	write(t, repo, "wiki/alpha/setup.md", "# Setup\n\n## Steps\nCreate the frobnicator directory first.\n")
 	write(t, repo, "notes/alpha/n-0001.md", "---\nkind: rag:gotcha\ncreated: 2026-10-01T10:00:00Z\n---\n\nThe zeta_flag option must stay off in production.\n")
-	write(t, repo, "notes/alpha/n-0002.md", "---\nstatus: retired\nretired_reason: wrong\n---\n\nOld retired claim about quibblewomp.\n")
+	write(t, repo, "notes/alpha/n-0002.md", "---\nstatus: retired\nretired_reason: wrong\n---\n\nOld claim about quibblewomp.\n")
 	write(t, repo, "facts/global/f-1.md", "---\ncategory: user_pref\ntrust: 0.5\n---\n\nPrefers short answers.\n")
 	write(t, repo, "wiki/alpha/broken.md", "---\ntitle: [unclosed\n---\nStill readable text about gadgets.\n")
-	write(t, repo, "projects.yaml", "projects:\n  - name: alpha\n    code_roots: ['"+code+"']\n    ignore_dirs: [backups]\n")
-	write(t, code, "src/main.py", "def compute_total(items):\n    return sum(items)\n")
-	write(t, code, "node_modules/skip.js", "ignored()\n")
-	write(t, code, "assets/logo.png", "binary")
-	write(t, code, "assets/blob.dat", "head\x00\x01\x02 not text")
-	write(t, code, ".env", "TOK"+"EN_VALUE=should-never-be-indexed-12345\n") // built at run time so the leak gate does not trip on the fixture
-	write(t, code, ".worktrees/copy/src/main.py", "def compute_total(items):\n    return sum(items)\n")
-	write(t, code, "data/rows.jsonl", "{\"row\": \"jsonl_marker_zz\"}\n")
-	write(t, code, "export.csv", "a,b\ncsv_marker_zz,2\n")
-	write(t, code, "big.json", "{\"k\": \""+strings.Repeat("x", 120000)+"\"}")
-	write(t, code, "config.json", "{\"setting\": \"small_json_marker_zz\"}")
-	write(t, code, "keys/server.pem", "-----BEGIN-----\nabc\n")
-	write(t, code, "backups/dump.sql", "INSERT INTO t VALUES (1);\n")
-	return repo, code
+	return repo
 }
 
 func openDB(t *testing.T) *DB {
@@ -58,17 +46,17 @@ func openDB(t *testing.T) *DB {
 }
 
 func TestRescanBuildsNodesEdgesAndSkipsJunk(t *testing.T) {
-	repo, _ := fixture(t)
+	repo := fixture(t)
 	d := openDB(t)
 	res, err := d.Rescan(repo)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Added != 8 || res.Changed != 0 || res.Removed != 0 {
+	if res.Added != 6 || res.Changed != 0 || res.Removed != 0 {
 		t.Fatalf("first scan: %+v", res)
 	}
 	st, _ := d.Stats()
-	want := map[string]int{"wiki/alpha": 3, "note/alpha": 2, "fact/global": 1, "code/alpha": 2}
+	want := map[string]int{"wiki/alpha": 3, "note/alpha": 2, "fact/global": 1}
 	if !reflect.DeepEqual(st, want) {
 		t.Fatalf("stats %v want %v", st, want)
 	}
@@ -92,7 +80,7 @@ func TestRescanBuildsNodesEdgesAndSkipsJunk(t *testing.T) {
 }
 
 func TestDeleteAndRebuildGivesTheSameHash(t *testing.T) {
-	repo, _ := fixture(t)
+	repo := fixture(t)
 	dir := t.TempDir()
 	a, _ := Open(filepath.Join(dir, "a.db"))
 	defer a.Close()
@@ -114,14 +102,14 @@ func TestDeleteAndRebuildGivesTheSameHash(t *testing.T) {
 }
 
 func TestIncrementalRescanChangesExactlyTheEditedNode(t *testing.T) {
-	repo, _ := fixture(t)
+	repo := fixture(t)
 	d := openDB(t)
 	d.Rescan(repo)
 	before, _ := d.NodeDigests()
 	h0, _, _ := d.StateHash()
 
 	res, _ := d.Rescan(repo)
-	if res.Added+res.Changed+res.Removed != 0 || res.Unchanged != 8 {
+	if res.Added+res.Changed+res.Removed != 0 || res.Unchanged != 6 {
 		t.Fatalf("an unchanged tree must change nothing: %+v", res)
 	}
 	write(t, repo, "wiki/alpha/setup.md", "# Setup\n\n## Steps\nCreate the frobnicator directory first, then restart.\n")
@@ -151,7 +139,7 @@ func TestIncrementalRescanChangesExactlyTheEditedNode(t *testing.T) {
 }
 
 func TestRemovedFileLeavesNoTrace(t *testing.T) {
-	repo, _ := fixture(t)
+	repo := fixture(t)
 	d := openDB(t)
 	d.Rescan(repo)
 	os.Remove(filepath.Join(repo, "notes/alpha/n-0001.md"))
@@ -171,8 +159,8 @@ func TestRemovedFileLeavesNoTrace(t *testing.T) {
 	}
 }
 
-func TestKeywordRecallRulesStatusFiltersAndIdentifiers(t *testing.T) {
-	repo, _ := fixture(t)
+func TestKeywordRecallRulesAndIdentifiers(t *testing.T) {
+	repo := fixture(t)
 	d := openDB(t)
 	d.Rescan(repo)
 	// an identifier with an underscore is one token
@@ -180,16 +168,15 @@ func TestKeywordRecallRulesStatusFiltersAndIdentifiers(t *testing.T) {
 	if len(hits) == 0 || hits[0].NodeID != "notes/alpha/n-0001" {
 		t.Fatalf("identifier query: %+v", hits)
 	}
-	// retired nodes are never returned
-	if hits, _ := d.Keyword("quibblewomp", Filter{}); len(hits) != 0 {
-		t.Fatalf("retired node returned: %+v", hits)
-	}
 	// project and kind filters
-	if hits, _ := d.Keyword("compute_total", Filter{Kinds: []string{"code"}, Project: "alpha"}); len(hits) != 1 || hits[0].Path != "src/main.py" {
-		t.Fatalf("code filter: %+v", hits)
+	if hits, _ := d.Keyword("zeta_flag", Filter{Kinds: []string{"note"}, Project: "alpha"}); len(hits) != 1 {
+		t.Fatalf("note filter: %+v", hits)
 	}
-	if hits, _ := d.Keyword("compute_total", Filter{Project: "other"}); len(hits) != 0 {
+	if hits, _ := d.Keyword("zeta_flag", Filter{Project: "other"}); len(hits) != 0 {
 		t.Fatalf("project filter: %+v", hits)
+	}
+	if hits, _ := d.Keyword("zeta_flag", Filter{Kinds: []string{"code"}}); len(hits) != 0 {
+		t.Fatalf("code is not a kind: %+v", hits)
 	}
 	// heading-aware: the section name travels with the hit
 	hits, _ = d.Keyword("installer", Filter{Kinds: []string{"wiki"}})
@@ -206,30 +193,24 @@ func TestKeywordRecallRulesStatusFiltersAndIdentifiers(t *testing.T) {
 	}
 }
 
-func TestCodeLayerNeverIndexesHiddenBinarySecretOrIgnoredFiles(t *testing.T) {
-	repo, _ := fixture(t)
+// An old note file that still has status keys in its frontmatter is a normal pending note.
+func TestOldStatusKeysAreIgnored(t *testing.T) {
+	repo := fixture(t)
 	d := openDB(t)
 	d.Rescan(repo)
-	rows, _ := d.Query(`SELECT path FROM nodes WHERE kind='code' ORDER BY path`)
-	var got []string
-	for rows.Next() {
-		var p string
-		rows.Scan(&p)
-		got = append(got, p)
+	hits, _ := d.Keyword("quibblewomp", Filter{Kinds: []string{"note"}})
+	if len(hits) != 1 || hits[0].NodeID != "notes/alpha/n-0002" {
+		t.Fatalf("a note with status: retired must be read as a normal note: %+v", hits)
 	}
-	rows.Close()
-	if !reflect.DeepEqual(got, []string{"config.json", "src/main.py"}) {
-		t.Fatalf("code layer must hold only config.json and src/main.py, got %v", got)
-	}
-	for _, q := range []string{"should-never-be-indexed-12345", "TOKEN_VALUE", "BEGIN", "INSERT", "jsonl_marker_zz", "csv_marker_zz"} {
-		if hits, _ := d.Keyword(q, Filter{}); len(hits) != 0 {
-			t.Fatalf("%q reached the index: %+v", q, hits)
-		}
+	write(t, repo, "notes/alpha/n-0003.md", "---\nstatus: archived\nsuperseded_by: x\n---\n\nArchived looking note about thistlebrook.\n")
+	d.Rescan(repo)
+	if hits, _ := d.Keyword("thistlebrook", Filter{}); len(hits) != 1 {
+		t.Fatalf("archived key not ignored: %+v", hits)
 	}
 }
 
 func TestAccentedQueriesFindAccentedAndPlainText(t *testing.T) {
-	repo, _ := fixture(t)
+	repo := fixture(t)
 	write(t, repo, "wiki/alpha/hu.md", "# Védelem\n\nAz árvíztűrő tükörfúrógép szabályai.\n")
 	d := openDB(t)
 	d.Rescan(repo)
@@ -240,88 +221,16 @@ func TestAccentedQueriesFindAccentedAndPlainText(t *testing.T) {
 	}
 }
 
-func TestCodeRootProblemsNeverDeleteTheLayer(t *testing.T) {
-	repo, code := fixture(t)
-	d := openDB(t)
-	d.Rescan(repo)
-	link := filepath.Join(t.TempDir(), "link")
-	if err := os.Symlink(code, link); err != nil {
-		t.Fatal(err)
-	}
-	// a root that is a symlink works
-	write(t, repo, "projects.yaml", "projects:\n  - name: alpha\n    code_roots: ['"+link+"']\n    ignore_dirs: [backups]\n")
-	if res, err := d.Rescan(repo); err != nil || res.Removed != 0 {
-		t.Fatalf("symlinked root: %+v %v", res, err)
-	}
-	// a missing root is an error and the code entries stay
-	write(t, repo, "projects.yaml", "projects:\n  - name: alpha\n    code_roots: ['"+filepath.Join(code, "gone")+"']\n")
-	if _, err := d.Rescan(repo); err == nil {
-		t.Fatal("a missing code root must be an error")
-	}
-	st, _ := d.Stats()
-	if st["code/alpha"] != 2 {
-		t.Fatalf("code entries were lost: %v", st)
-	}
-	// a root that yields no files is an error
-	empty := t.TempDir()
-	write(t, repo, "projects.yaml", "projects:\n  - name: alpha\n    code_roots: ['"+empty+"']\n")
-	if _, err := d.Rescan(repo); err == nil {
-		t.Fatal("an empty code root must be an error")
-	}
-	// a relative root is relative to the memory repository, whatever the working directory is
-	rel := filepath.Join(repo, "src-copy")
-	write(t, rel, "a.py", "def relative_root_marker():\n    return 1\n")
-	write(t, repo, "projects.yaml", "projects:\n  - name: beta\n    code_roots: ['src-copy']\n")
-	cwd, _ := os.Getwd()
-	os.Chdir(t.TempDir())
-	defer os.Chdir(cwd)
-	if _, err := d.Rescan(repo); err != nil {
-		t.Fatalf("relative root: %v", err)
-	}
-	if hits, _ := d.Keyword("relative_root_marker", Filter{Project: "beta"}); len(hits) != 1 {
-		t.Fatalf("relative root not read: %+v", hits)
-	}
-}
-
-func TestTwoRootsWithTheSamePathKeepTheFirstAndWarn(t *testing.T) {
-	repo, _ := fixture(t)
-	one, two := t.TempDir(), t.TempDir()
-	write(t, one, "README.md", "readme one\n")
-	write(t, two, "README.md", "readme two\n")
-	write(t, repo, "projects.yaml", "projects:\n  - name: beta\n    code_roots: ['"+one+"', '"+two+"']\n")
-	d := openDB(t)
-	res, err := d.Rescan(repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	found := false
-	for _, w := range res.Warnings {
-		found = found || strings.Contains(w, "first code root wins")
-	}
-	if !found {
-		t.Fatalf("no warning: %v", res.Warnings)
-	}
-	if hits, _ := d.Keyword("one", Filter{Project: "beta", Kinds: []string{"code"}}); len(hits) != 1 {
-		t.Fatalf("first root must win: %+v", hits)
-	}
-	for _, bad := range []string{"a/b", "has space", ".hidden", ""} {
-		write(t, repo, "projects.yaml", "projects:\n  - name: '"+bad+"'\n    code_roots: ['"+one+"']\n")
-		if _, err := d.Rescan(repo); err == nil {
-			t.Fatalf("project name %q must be refused", bad)
-		}
-	}
-}
-
 func TestUnreadablePathsAreReportedAndTheirNodesKept(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("permissions are not enforced for root")
 	}
-	repo, code := fixture(t)
-	write(t, code, "sub/inner.py", "def inner_marker_fn():\n    pass\n")
+	repo := fixture(t)
+	write(t, repo, "wiki/alpha/sub/inner.md", "# Inner\n\ninner_marker_fn is documented here.\n")
 	d := openDB(t)
 	d.Rescan(repo)
-	os.Chmod(filepath.Join(code, "sub"), 0)
-	defer os.Chmod(filepath.Join(code, "sub"), 0o755)
+	os.Chmod(filepath.Join(repo, "wiki/alpha/sub"), 0)
+	defer os.Chmod(filepath.Join(repo, "wiki/alpha/sub"), 0o755)
 	res, err := d.Rescan(repo)
 	if err != nil {
 		t.Fatalf("one unreadable directory must not stop the rescan: %v", err)
@@ -335,7 +244,7 @@ func TestUnreadablePathsAreReportedAndTheirNodesKept(t *testing.T) {
 }
 
 func TestMarkdownSymlinksAndHiddenWikiDirsAreNotIndexed(t *testing.T) {
-	repo, _ := fixture(t)
+	repo := fixture(t)
 	outside := filepath.Join(t.TempDir(), "outside.md")
 	os.WriteFile(outside, []byte("outside_link_marker text\n"), 0o644)
 	os.Symlink(outside, filepath.Join(repo, "wiki/alpha/linked.md"))
@@ -349,35 +258,8 @@ func TestMarkdownSymlinksAndHiddenWikiDirsAreNotIndexed(t *testing.T) {
 	}
 }
 
-func TestPrivateKeyFilesAndSecretNamesAreNeverIndexed(t *testing.T) {
-	repo, code := fixture(t)
-	write(t, code, "deploy.sh", "echo start\n"+"-----BEGIN RSA PRIV"+"ATE KEY-----\nabc\n")
-	write(t, code, "wp-config.php", "<?php define('DB_NAME', 'wpconfig_marker');\n")
-	write(t, code, "terraform.tfstate", "{\"tfstate_marker\": 1}\n")
-	write(t, code, "creds/credentials.json", "{\"credentials_marker\": 1}\n")
-	write(t, code, "settings.py", "API_"+"KEY = 'abcdefghijklmnop1234'\n")
-	d := openDB(t)
-	res, _ := d.Rescan(repo)
-	for _, q := range []string{"wpconfig_marker", "tfstate_marker", "credentials_marker", "start"} {
-		if hits, _ := d.Keyword(q, Filter{Kinds: []string{"code"}}); len(hits) != 0 {
-			t.Fatalf("%q reached the index: %+v", q, hits)
-		}
-	}
-	var keyWarn, credWarn bool
-	for _, w := range res.Warnings {
-		keyWarn = keyWarn || strings.Contains(w, "private key block")
-		credWarn = credWarn || strings.Contains(w, "settings.py") && strings.Contains(w, "credential-like")
-		if strings.Contains(w, "abcdefghijklmnop") {
-			t.Fatalf("a warning printed the matched value: %s", w)
-		}
-	}
-	if !keyWarn || !credWarn {
-		t.Fatalf("expected a key-block warning and a credential-like warning: %v", res.Warnings)
-	}
-}
-
 func TestLayerRootThatIsASymlinkKeepsItsNodes(t *testing.T) {
-	repo, _ := fixture(t)
+	repo := fixture(t)
 	d := openDB(t)
 	d.Rescan(repo)
 	before, _ := d.Stats()
@@ -395,17 +277,8 @@ func TestLayerRootThatIsASymlinkKeepsItsNodes(t *testing.T) {
 	}
 }
 
-func TestEmptyCodeRootIsRefused(t *testing.T) {
-	repo, _ := fixture(t)
-	write(t, repo, "projects.yaml", "projects:\n  - name: alpha\n    code_roots: ['']\n")
-	d := openDB(t)
-	if _, err := d.Rescan(repo); err == nil || !strings.Contains(err.Error(), "empty code root") {
-		t.Fatalf("%v", err)
-	}
-}
-
 func TestDecomposedAccentsAndHiddenMarkdown(t *testing.T) {
-	repo, _ := fixture(t)
+	repo := fixture(t)
 	write(t, repo, "wiki/alpha/hu2.md", "# Őrzés\n\nAz őrzés szabályai.\n")
 	write(t, repo, "wiki/alpha/.draft.md", "draft_hidden_marker\n")
 	d := openDB(t)
@@ -420,13 +293,12 @@ func TestDecomposedAccentsAndHiddenMarkdown(t *testing.T) {
 }
 
 func TestPGPAndPuTTYKeysAreNotIndexed(t *testing.T) {
-	repo, code := fixture(t)
-	write(t, code, "pgp.txt", "-----BEGIN PGP PRIVATE"+" KEY BLOCK-----\npgp_body_marker\n")
-	write(t, code, "putty.txt", "PuTTY-User-"+"Key-File-3: ssh-rsa\nputty_body_marker\n")
-	write(t, code, "key.ppk", "ppk_body_marker\n")
+	repo := fixture(t)
+	write(t, repo, "notes/alpha/pgp.md", "-----BEGIN PGP PRIVATE"+" KEY BLOCK-----\npgp_body_marker\n")
+	write(t, repo, "notes/alpha/putty.md", "PuTTY-User-"+"Key-File-3: ssh-rsa\nputty_body_marker\n")
 	d := openDB(t)
 	d.Rescan(repo)
-	for _, q := range []string{"pgp_body_marker", "putty_body_marker", "ppk_body_marker"} {
+	for _, q := range []string{"pgp_body_marker", "putty_body_marker"} {
 		if hits, _ := d.Keyword(q, Filter{}); len(hits) != 0 {
 			t.Fatalf("%q was indexed", q)
 		}
@@ -434,12 +306,12 @@ func TestPGPAndPuTTYKeysAreNotIndexed(t *testing.T) {
 }
 
 func TestUnchangedFilesAreNotChunkedAgain(t *testing.T) {
-	repo, _ := fixture(t)
+	repo := fixture(t)
 	d := openDB(t)
 	d.Rescan(repo)
 	parseCalls.Store(0)
 	res, _ := d.Rescan(repo)
-	if res.Unchanged != 8 || parseCalls.Load() != 0 {
+	if res.Unchanged != 6 || parseCalls.Load() != 0 {
 		t.Fatalf("%+v parsed %d files", res, parseCalls.Load())
 	}
 	write(t, repo, "wiki/alpha/setup.md", "# Setup\n\nchanged text here\n")
@@ -450,7 +322,7 @@ func TestUnchangedFilesAreNotChunkedAgain(t *testing.T) {
 }
 
 func TestKeyBlockInMarkdownIsNotIndexed(t *testing.T) {
-	repo, _ := fixture(t)
+	repo := fixture(t)
 	write(t, repo, "wiki/alpha/keys.md", "# Keys\n\n-----BEGIN PGP PRIVATE"+" KEY BLOCK-----\nmd_key_body_marker\n")
 	d := openDB(t)
 	res, _ := d.Rescan(repo)
@@ -466,8 +338,8 @@ func TestKeyBlockInMarkdownIsNotIndexed(t *testing.T) {
 	}
 }
 
-func TestBrokenLayerLinkAndRepoRootAreRefused(t *testing.T) {
-	repo, _ := fixture(t)
+func TestBrokenLayerLinkIsRefused(t *testing.T) {
+	repo := fixture(t)
 	d := openDB(t)
 	d.Rescan(repo)
 	before, _ := d.Stats()
@@ -482,13 +354,6 @@ func TestBrokenLayerLinkAndRepoRootAreRefused(t *testing.T) {
 	}
 	os.Remove(filepath.Join(repo, "wiki"))
 	os.Rename(filepath.Join(repo, "wiki-away"), filepath.Join(repo, "wiki"))
-	// "." and the repository path itself are not valid code roots
-	for _, root := range []string{".", repo, "./", "..", "wiki", filepath.Dir(repo)} {
-		write(t, repo, "projects.yaml", "projects:\n  - name: alpha\n    code_roots: ['"+root+"']\n")
-		if _, err := d.Rescan(repo); err == nil {
-			t.Fatalf("code root %q must be refused", root)
-		}
-	}
 }
 
 func TestOpenReadOnlyNeverCreatesOrMigrates(t *testing.T) {
@@ -506,7 +371,7 @@ func TestOpenReadOnlyNeverCreatesOrMigrates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.Exec(`INSERT INTO nodes(id,kind,project,path,stem,title,status,retired_reason,superseded_by,pinned,note_kind,created_at,updated_at,content_hash) VALUES('wiki/p/a','wiki','p','wiki/p/a.md','a','A','active','','',0,'','','','h')`); err != nil {
+	if _, err := d.Exec(`INSERT INTO nodes(id,kind,project,path,stem,title,pinned,note_kind,created_at,updated_at,content_hash) VALUES('wiki/p/a','wiki','p','wiki/p/a.md','a','A',0,'','','','h')`); err != nil {
 		t.Fatal(err)
 	}
 	d.Exec(`PRAGMA user_version = 3`)

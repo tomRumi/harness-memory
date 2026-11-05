@@ -39,6 +39,9 @@ type Store struct {
 	OnWrite func()
 	mu      sync.Mutex
 	ev      *sql.DB
+
+	embedMu  sync.Mutex
+	embedErr error // the last embedding error after a write
 }
 
 // New opens the store. events.db is the history of what was recalled, learned, rated and retired; it is not derived
@@ -87,18 +90,6 @@ func project(p string) (string, error) {
 	return p, nil
 }
 
-func (s *Store) health(ctx context.Context) error {
-	if s.Emb == nil {
-		return nil
-	}
-	hc, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	if _, err := s.Emb.Query(hc, "healthcheck"); err != nil {
-		return fmt.Errorf("embedder unavailable (%v): nothing was stored", err)
-	}
-	return nil
-}
-
 // writeFile writes atomically: a reader never sees half a note.
 func writeFile(path string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -125,8 +116,9 @@ func writeFile(path string, data []byte) error {
 	return os.Rename(name, path)
 }
 
-// afterWrite updates the index for the changed files and tells the committer; then it embeds what is new. The commit is
-// scheduled before the embedding is tried, so a model server that is down cannot keep a saved note out of git.
+// afterWrite updates the index for the changed files (a file that is gone leaves the index) and tells the committer;
+// then it embeds what is new, best effort. A model server that is down never fails a write and never keeps a saved
+// note out of git: the error is kept (EmbedError) and recall uses keywords for the note until a vector exists.
 func (s *Store) afterWrite(ctx context.Context, rels ...string) error {
 	for _, r := range rels {
 		if err := s.DB.Upsert(s.Repo, r); err != nil {
@@ -139,9 +131,10 @@ func (s *Store) afterWrite(ctx context.Context, rels ...string) error {
 	if s.Emb != nil {
 		ectx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
-		if _, err := s.DB.EmbedPending(ectx, s.Emb, nil); err != nil {
-			return fmt.Errorf("saved, but embedding failed (run `hms embed`): %w", err)
-		}
+		_, err := s.DB.EmbedPending(ectx, s.Emb, nil)
+		s.embedMu.Lock()
+		s.embedErr = err
+		s.embedMu.Unlock()
 	}
 	if s.OnWrite != nil {
 		s.OnWrite()
@@ -149,25 +142,11 @@ func (s *Store) afterWrite(ctx context.Context, rels ...string) error {
 	return nil
 }
 
-// setFrontmatter changes keys of a file's frontmatter and leaves every other byte of the file as it was.
-func (s *Store) setFrontmatter(rel string, set map[string]any) error {
-	path := filepath.Join(s.Repo, rel)
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	out, err := md.SetKeys(raw, set)
-	if err != nil {
-		return fmt.Errorf("%s: %w", rel, err)
-	}
-	mode := os.FileMode(0o644)
-	if fi, err := os.Stat(path); err == nil {
-		mode = fi.Mode().Perm()
-	}
-	if err := writeFile(path, out); err != nil {
-		return err
-	}
-	return os.Chmod(path, mode)
+// EmbedError is the error of the last embedding attempt after a write; nil when it worked or none was made.
+func (s *Store) EmbedError() error {
+	s.embedMu.Lock()
+	defer s.embedMu.Unlock()
+	return s.embedErr
 }
 
 // Learn deposits one note and returns its id plus a short remark for the caller. It is idempotent: the same text
@@ -196,10 +175,7 @@ func (s *Store) Learn(ctx context.Context, text, proj, kind, supersedes string) 
 		s.Event("learn_dup", id, proj, "")
 		return id, nil
 	}
-	if err := s.health(ctx); err != nil {
-		return "", err
-	}
-	fm := map[string]any{"kind": kind, "status": "active", "created": time.Now().UTC().Format(time.RFC3339Nano), "source": "learn"}
+	fm := map[string]any{"kind": kind, "created": time.Now().UTC().Format(time.RFC3339Nano), "source": "learn"}
 	if err := writeFile(filepath.Join(s.Repo, rel), md.Render(fm, text)); err != nil {
 		return "", err
 	}
@@ -223,12 +199,12 @@ func (s *Store) Learn(ctx context.Context, text, proj, kind, supersedes string) 
 				note = fmt.Sprintf(" || supersedes=%q matched no single note — nothing was marked as replaced", supersedes)
 			} else {
 				trel := notes[0] + ".md"
-				if err := s.setFrontmatter(trel, map[string]any{"status": "superseded", "superseded_by": id}); err != nil {
+				if err := os.Remove(filepath.Join(s.Repo, filepath.FromSlash(trel))); err != nil && !os.IsNotExist(err) {
 					return id, err
 				}
 				changed = append(changed, trel)
 				s.Event("supersede", notes[0], proj, "->"+id)
-				note = " || replaced " + shortID(notes[0])
+				note = " || replaced " + shortID(notes[0]) + " (deleted; git history keeps its text)"
 			}
 		}
 	}
@@ -275,10 +251,7 @@ func (s *Store) AddFact(ctx context.Context, text, proj, category string, trust 
 	if _, err := os.Stat(filepath.Join(s.Repo, rel)); err == nil {
 		return id, nil
 	}
-	if err := s.health(ctx); err != nil {
-		return "", err
-	}
-	fm := map[string]any{"category": category, "trust": trust, "status": "active", "created": time.Now().UTC().Format(time.RFC3339Nano)}
+	fm := map[string]any{"category": category, "trust": trust, "created": time.Now().UTC().Format(time.RFC3339Nano)}
 	if err := writeFile(filepath.Join(s.Repo, rel), md.Render(fm, text)); err != nil {
 		return "", err
 	}
@@ -299,7 +272,8 @@ func (s *Store) resolve(prefix, proj string) (id string, msg string) {
 	return ids[0], ""
 }
 
-// Retire withdraws a note or fact that nothing replaces. The file stays; recall stops returning it.
+// Retire deletes a note or fact. The file is removed and the node leaves the index; the committer records the
+// deletion, so git history keeps the text.
 func (s *Store) Retire(ctx context.Context, prefix, reason, proj string) (string, error) {
 	if proj != "" {
 		var err error
@@ -313,25 +287,22 @@ func (s *Store) Retire(ctx context.Context, prefix, reason, proj string) (string
 	if msg != "" {
 		return msg, nil
 	}
-	var status, p string
-	if err := s.DB.QueryRow(`SELECT status, project FROM nodes WHERE id=?`, id).Scan(&status, &p); err != nil {
+	var p string
+	if err := s.DB.QueryRow(`SELECT project FROM nodes WHERE id=?`, id).Scan(&p); err != nil {
 		return "", err
-	}
-	if status != "active" {
-		return fmt.Sprintf("%s is already %s — nothing changed", shortID(id), status), nil
 	}
 	if r := []rune(reason); len(r) > 200 {
 		reason = string(r[:200])
 	}
 	rel := id + ".md"
-	if err := s.setFrontmatter(rel, map[string]any{"status": "retired", "retired_reason": reason}); err != nil {
+	if err := os.Remove(filepath.Join(s.Repo, filepath.FromSlash(rel))); err != nil && !os.IsNotExist(err) {
 		return "", err
 	}
 	s.Event("retire", id, p, reason)
 	if err := s.afterWrite(ctx, rel); err != nil {
 		return "", err
 	}
-	out := "retired " + shortID(id)
+	out := "deleted " + shortID(id)
 	if reason != "" {
 		out += " (" + truncate(reason, 80) + ")"
 	}
@@ -345,8 +316,7 @@ func truncate(s string, n int) string {
 	return s
 }
 
-// Feedback records whether a recalled note helped. Ratings go to events.db; they shape recall order and the weekly
-// report (step 7), and never remove a hit by themselves.
+// Feedback records whether a recalled note helped. Ratings go to events.db; they never remove a hit by themselves.
 // RetireAfter is the number of distinct sessions that must rate a note unhelpful (and none helpful) before it is a
 // candidate for retirement.
 const RetireAfter = 5
@@ -406,7 +376,7 @@ func (s *Store) Ratings(id string) (helpful, unhelpful int) {
 }
 
 // RetireCandidates lists notes (not facts, not wiki entries) that at least RetireAfter distinct sessions rated
-// unhelpful and no session rated helpful. It only lists; the curation owner decides what to do (step 7).
+// unhelpful and no session rated helpful. It only lists.
 func (s *Store) RetireCandidates() []string {
 	rows, err := s.ev.Query(`SELECT DISTINCT node_id FROM events WHERE kind='unhelpful' AND node_id LIKE 'notes/%'`)
 	if err != nil {
@@ -421,10 +391,10 @@ func (s *Store) RetireCandidates() []string {
 	rows.Close()
 	var out []string
 	for _, id := range ids {
-		var status string
-		s.DB.QueryRow(`SELECT status FROM nodes WHERE id=?`, id).Scan(&status)
-		if status != "active" {
-			continue
+		var n int
+		s.DB.QueryRow(`SELECT count(*) FROM nodes WHERE id=?`, id).Scan(&n)
+		if n == 0 {
+			continue // already deleted
 		}
 		if h, u := s.Ratings(id); h == 0 && u >= RetireAfter {
 			out = append(out, id)

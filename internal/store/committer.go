@@ -158,16 +158,34 @@ func (c *Committer) Flush() {
 	}
 }
 
-// commit stages the given files and commits them. It returns nil when there was nothing to commit.
+// commit stages the given paths and commits them. A tracked path that no longer exists is staged as a deletion. Only
+// notes, facts and wiki entries are ever named. It returns nil when there was nothing to commit.
 func (c *Committer) commit(snap []string) error {
-	var add []string
+	var add, gone []string
 	for _, p := range snap {
+		if !strings.HasPrefix(p, "notes/") && !strings.HasPrefix(p, "facts/") && !strings.HasPrefix(p, "wiki/") {
+			continue
+		}
 		if _, err := os.Stat(filepath.Join(c.repo, filepath.FromSlash(p))); err == nil {
 			add = append(add, p)
+		} else {
+			gone = append(gone, p)
+		}
+	}
+	if len(gone) > 0 {
+		// a file that was created and deleted before it was ever committed is unknown to git and needs no staging
+		out, err := c.git(append([]string{"--literal-pathspecs", "ls-files", "--"}, gone...)...)
+		if err != nil {
+			return fmt.Errorf("git ls-files: %v: %s", err, out)
+		}
+		for _, f := range strings.Split(out, "\n") {
+			if f != "" {
+				add = append(add, f)
+			}
 		}
 	}
 	if len(add) > 0 {
-		if out, err := c.git(append([]string{"add", "--"}, add...)...); err != nil {
+		if out, err := c.git(append([]string{"--literal-pathspecs", "add", "-A", "--"}, add...)...); err != nil {
 			return fmt.Errorf("git add: %v: %s", err, out)
 		}
 	}

@@ -7,8 +7,8 @@ import (
 	"time"
 )
 
-// hitsByID fetches the chunks with the given ids as hits, keeping only active ones.
-func (d *DB) hitsByID(ids []int64, activeOnly bool) (map[int64]Hit, error) {
+// hitsByID fetches the chunks with the given ids as hits.
+func (d *DB) hitsByID(ids []int64) (map[int64]Hit, error) {
 	out := map[int64]Hit{}
 	if len(ids) == 0 {
 		return out, nil
@@ -17,10 +17,7 @@ func (d *DB) hitsByID(ids []int64, activeOnly bool) (map[int64]Hit, error) {
 	for i, id := range ids {
 		args[i] = id
 	}
-	q := `SELECT c.id, n.id, n.kind, n.project, n.path, c.section, c.text, n.status FROM chunks c JOIN nodes n ON n.id=c.node_id WHERE c.id IN (` + strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",") + `)`
-	if activeOnly {
-		q += ` AND n.status='active'`
-	}
+	q := `SELECT c.id, n.id, n.kind, n.project, n.path, c.section, c.text FROM chunks c JOIN nodes n ON n.id=c.node_id WHERE c.id IN (` + strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",") + `)`
 	rows, err := d.Query(q, args...)
 	if err != nil {
 		return nil, err
@@ -28,7 +25,7 @@ func (d *DB) hitsByID(ids []int64, activeOnly bool) (map[int64]Hit, error) {
 	defer rows.Close()
 	for rows.Next() {
 		var h Hit
-		if err := rows.Scan(&h.ChunkID, &h.NodeID, &h.Kind, &h.Project, &h.Path, &h.Section, &h.Text, &h.Status); err != nil {
+		if err := rows.Scan(&h.ChunkID, &h.NodeID, &h.Kind, &h.Project, &h.Path, &h.Section, &h.Text); err != nil {
 			return nil, err
 		}
 		out[h.ChunkID] = h
@@ -86,7 +83,7 @@ func (d *DB) Hybrid(ctx context.Context, e Embedder, m *Matrix, query string, f 
 				keep[h.ChunkID] = true
 			}
 		}
-		cut := append([]int64(nil), ids[:limit*3]...) // a few more than needed, in case some are not active any more
+		cut := append([]int64(nil), ids[:limit*3]...) // a few more than needed
 		in := map[int64]bool{}
 		for _, id := range cut {
 			in[id] = true
@@ -98,11 +95,11 @@ func (d *DB) Hybrid(ctx context.Context, e Embedder, m *Matrix, query string, f 
 		}
 		ids = cut
 	}
-	byID, err := d.hitsByID(ids, !f.AllStatuses)
+	byID, err := d.hitsByID(ids)
 	if err != nil {
 		return nil, "", err
 	}
-	var ordered []int64 // active chunks in fused order
+	var ordered []int64 // chunks in fused order
 	for _, id := range ids {
 		if _, ok := byID[id]; ok {
 			ordered = append(ordered, id)
@@ -163,7 +160,7 @@ func (d *DB) Hybrid(ctx context.Context, e Embedder, m *Matrix, query string, f 
 // keyword result is returned.
 const QueryEmbedTimeout = 2 * time.Second
 
-// wantsVectors is false when the filter asks only for kinds that have no vectors (code): no vector can match, so the
+// wantsVectors is false when the filter asks only for kinds that have no vectors: no vector can match, so the
 // model call is skipped.
 func wantsVectors(f Filter) bool {
 	if len(f.Kinds) == 0 {

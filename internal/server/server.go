@@ -19,7 +19,6 @@ import (
 // Quotas per layer for an unrestricted recall, and the cap on one hit's text (ported: server.py:44, :371).
 const (
 	QuotaWiki   = 2
-	QuotaCode   = 3
 	QuotaMemory = 1
 	QuotaGlobal = 1
 	HitChars    = 600
@@ -79,11 +78,10 @@ func text(msg string) (*mcp.CallToolResult, any, error) {
 // ---- recall
 
 type RecallIn struct {
-	Query           string `json:"query" jsonschema:"what to look for, in plain words"`
-	Project         string `json:"project,omitempty" jsonschema:"project name; empty searches every project"`
-	Layer           string `json:"layer,omitempty" jsonschema:"auto (default), wiki, code, memory or fact"`
-	IncludeArchived bool   `json:"include_archived,omitempty" jsonschema:"also return archived, superseded and retired notes (keyword match only)"`
-	Budget          int    `json:"budget,omitempty" jsonschema:"maximum characters in the answer (0 means no limit)"`
+	Query   string `json:"query" jsonschema:"what to look for, in plain words"`
+	Project string `json:"project,omitempty" jsonschema:"project name; empty searches every project"`
+	Layer   string `json:"layer,omitempty" jsonschema:"auto (default), wiki, memory or fact"`
+	Budget  int    `json:"budget,omitempty" jsonschema:"maximum characters in the answer (0 means no limit)"`
 }
 
 func label(h index.Hit) string {
@@ -97,9 +95,6 @@ func label(h index.Hit) string {
 			id = id[:8]
 		}
 		l += " #" + id
-	}
-	if h.Status != "" && h.Status != "active" {
-		l += " (" + h.Status + ")"
 	}
 	return l
 }
@@ -125,21 +120,19 @@ func (s *Server) Recall(ctx context.Context, in RecallIn) string {
 		kinds []string
 		quota int
 	}
-	all := []pass{{"wiki", []string{"wiki"}, QuotaWiki}, {"code", []string{"code"}, QuotaCode}, {"memory", []string{"note", "fact"}, QuotaMemory}}
+	all := []pass{{"wiki", []string{"wiki"}, QuotaWiki}, {"memory", []string{"note", "fact"}, QuotaMemory}}
 	var passes []pass
 	switch layer {
 	case "", "auto":
 		passes = all
 	case "wiki":
 		passes = []pass{{"wiki", []string{"wiki"}, 5}}
-	case "code":
-		passes = []pass{{"code", []string{"code"}, 5}}
 	case "memory", "note", "notes":
 		passes = []pass{{"memory", []string{"note", "fact"}, 5}}
 	case "fact", "facts":
 		passes = []pass{{"fact", []string{"fact"}, 5}}
 	default:
-		return fmt.Sprintf("[recall: unknown layer %q — use auto, wiki, code, memory or fact]", in.Layer)
+		return fmt.Sprintf("[recall: unknown layer %q — use auto, wiki, memory or fact]", in.Layer)
 	}
 	proj := strings.ToLower(strings.TrimSpace(in.Project))
 	var lines []string
@@ -166,7 +159,7 @@ func (s *Server) Recall(ctx context.Context, in RecallIn) string {
 			lines = append(lines, fmt.Sprintf("[%s%s: not built for %s]", prefix, tag, where))
 			return
 		}
-		f := index.Filter{Project: project, Kinds: kinds, Limit: quota, AllStatuses: in.IncludeArchived}
+		f := index.Filter{Project: project, Kinds: kinds, Limit: quota}
 		hits, via, warn := s.DB.Hybrid(ctx, s.Emb, s.matrix(), q, f)
 		if via == "" && warn != nil { // the keyword search itself failed
 			lines = append(lines, fmt.Sprintf("[%s%s unavailable: %v]", prefix, tag, warn))
@@ -236,10 +229,9 @@ func (s *Server) Stats(ctx context.Context, in StatsIn) string {
 	if total == 0 {
 		fmt.Fprintf(&b, "[not built for %q]\n", proj)
 	}
-	var active, other int
-	s.DB.QueryRow(`SELECT count(*) FROM nodes WHERE kind='note' AND status='active'`+projClause(proj), projArgs(proj)...).Scan(&active)
-	s.DB.QueryRow(`SELECT count(*) FROM nodes WHERE kind='note' AND status<>'active'`+projClause(proj), projArgs(proj)...).Scan(&other)
-	fmt.Fprintf(&b, "notes: %d active, %d archived, superseded or retired\n", active, other)
+	var notes int
+	s.DB.QueryRow(`SELECT count(*) FROM nodes WHERE kind='note'`+projClause(proj), projArgs(proj)...).Scan(&notes)
+	fmt.Fprintf(&b, "notes waiting: %d\n", notes)
 	if s.Emb == nil {
 		b.WriteString("vectors: off (keyword match only; start with `serve -vectors` to use the embedder)\n")
 	} else {
@@ -249,6 +241,9 @@ func (s *Server) Stats(ctx context.Context, in StatsIn) string {
 			fmt.Fprintf(&b, "embedder: unavailable: %v\n", err)
 		} else if miss, total, err := s.DB.Pending(s.Emb.ID()); err == nil {
 			fmt.Fprintf(&b, "embedder: %s ok; %d of %d wiki/note/fact chunk texts have a vector\n", s.Emb.Model(), total-miss, total)
+			if s.St != nil && s.St.EmbedError() != nil {
+				fmt.Fprintf(&b, "embedder: the last write could not be embedded (%v); run `hms embed`\n", s.St.EmbedError())
+			}
 		}
 	}
 	if c := s.St.Commit; c != nil {
@@ -313,7 +308,7 @@ type FeedbackIn struct {
 func (s *Server) Handler() http.Handler {
 	build := func(*http.Request) *mcp.Server {
 		m := mcp.NewServer(&mcp.Implementation{Name: "harness-memory-service", Version: Version}, nil)
-		mcp.AddTool(m, &mcp.Tool{Name: "recall", Description: "Search the memory: wiki entries, code, notes and facts. Returns short hits with a path and, for notes, a #id to use with retire, feedback or learn(supersedes)."},
+		mcp.AddTool(m, &mcp.Tool{Name: "recall", Description: "Search the memory: wiki entries, notes and facts. Returns short hits with a path and, for notes, a #id to use with retire, feedback or learn(supersedes)."},
 			func(ctx context.Context, _ *mcp.CallToolRequest, in RecallIn) (*mcp.CallToolResult, any, error) {
 				return text(s.Recall(ctx, in))
 			})
@@ -341,7 +336,7 @@ func (s *Server) Handler() http.Handler {
 				}
 				return text(id)
 			})
-		mcp.AddTool(m, &mcp.Tool{Name: "retire", Description: "Withdraw a note or fact that is wrong or no longer applies. It is kept; recall stops returning it. An unknown or ambiguous id changes nothing."},
+		mcp.AddTool(m, &mcp.Tool{Name: "retire", Description: "Delete a note or fact that is wrong or no longer applies. The file is removed and git history keeps its text. An unknown or ambiguous id changes nothing."},
 			func(ctx context.Context, _ *mcp.CallToolRequest, in RetireIn) (*mcp.CallToolResult, any, error) {
 				t, err := s.St.Retire(ctx, in.ID, in.Reason, in.Project)
 				if err != nil {
@@ -376,7 +371,7 @@ func (s *Server) Handler() http.Handler {
 	return mux
 }
 
-var noiseLine = regexp.MustCompile(`^\[(global )?(wiki|code|memory|fact)(:| unavailable)`)
+var noiseLine = regexp.MustCompile(`^\[(global )?(wiki|memory|fact)(:| unavailable)`)
 
 // ContextBlock is the text a harness hook adds in front of a prompt: only real hits, no empty-state lines (a prompt
 // that finds nothing adds nothing). It is empty when there is nothing to add.

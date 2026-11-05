@@ -18,7 +18,7 @@ const schema = `
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS nodes(
   id TEXT PRIMARY KEY, kind TEXT NOT NULL, project TEXT NOT NULL, path TEXT NOT NULL, stem TEXT NOT NULL, title TEXT NOT NULL,
-  status TEXT NOT NULL, retired_reason TEXT NOT NULL, superseded_by TEXT NOT NULL, pinned INTEGER NOT NULL,
+  pinned INTEGER NOT NULL,
   note_kind TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, content_hash TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS nodes_project ON nodes(project, kind);
 CREATE TABLE IF NOT EXISTS chunks(
@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS edges(
 var ftsSchema = fmt.Sprintf(`CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(text, meta, tokenize = %q)`, "unicode61 remove_diacritics 2 tokenchars '_'")
 
 // schemaVersion changes whenever a table changes. The index is derived, so an older one is dropped and rebuilt.
-const schemaVersion = 4
+const schemaVersion = 5
 
 // vectorSchema lives in its own file next to the index: embedding is the slow part (hours on a small machine), and
 // deleting the index to rebuild it from the markdown must not throw the vectors away. They are keyed by the hash of

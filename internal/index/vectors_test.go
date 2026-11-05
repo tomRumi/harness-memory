@@ -60,7 +60,7 @@ func (b *bagEmbedder) Query(ctx context.Context, text string) ([]float32, error)
 }
 
 func TestEmbedPendingIsResumableAndSurvivesAnIndexRebuild(t *testing.T) {
-	repo, _ := fixture(t)
+	repo := fixture(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "index.db")
 	d, err := Open(path)
@@ -113,7 +113,7 @@ func TestEmbedPendingIsResumableAndSurvivesAnIndexRebuild(t *testing.T) {
 }
 
 func TestEmbedPendingStopsOnErrorAndKeepsWhatWasDone(t *testing.T) {
-	repo, _ := fixture(t)
+	repo := fixture(t)
 	d := openDB(t)
 	d.Rescan(repo)
 	e := &bagEmbedder{model: "bag"}
@@ -132,7 +132,7 @@ func TestEmbedPendingStopsOnErrorAndKeepsWhatWasDone(t *testing.T) {
 }
 
 func TestHybridFindsByMeaningAndFallsBack(t *testing.T) {
-	repo, _ := fixture(t)
+	repo := fixture(t)
 	write(t, repo, "wiki/alpha/lifecycle.md", "# Lifecycle\n\nProcesses claim a lease on each session so two of them cannot work on it together.\n")
 	d := openDB(t)
 	d.Rescan(repo)
@@ -163,17 +163,6 @@ func TestHybridFindsByMeaningAndFallsBack(t *testing.T) {
 			}
 		}
 	}
-	// retired nodes never come back through the vector pass
-	if hits, _, _ := d.Hybrid(context.Background(), e, m, "old retired claim about quibblewomp", Filter{Limit: 5}); func() bool {
-		for _, h := range hits {
-			if h.NodeID == "notes/alpha/n-0002" {
-				return true
-			}
-		}
-		return false
-	}() {
-		t.Fatal("a retired node was returned")
-	}
 	// a matrix built for another model dimension is refused with a clear message
 	if _, err := m.TopK(make([]float32, 8), 3, Filter{}); err == nil || !strings.Contains(err.Error(), "dimensions") {
 		t.Fatalf("dimension mismatch: %v", err)
@@ -181,12 +170,12 @@ func TestHybridFindsByMeaningAndFallsBack(t *testing.T) {
 }
 
 func TestTitleAndPathAreSearchable(t *testing.T) {
-	repo, _ := fixture(t)
+	repo := fixture(t)
 	d := openDB(t)
 	d.Rescan(repo)
-	hits, _ := d.Keyword("main", Filter{Kinds: []string{"code"}})
-	if len(hits) == 0 || hits[0].Path != "src/main.py" {
-		t.Fatalf("a code file must be found by its name: %+v", hits)
+	hits, _ := d.Keyword("overview", Filter{Kinds: []string{"wiki"}})
+	if len(hits) == 0 || hits[0].Path != "wiki/alpha/overview.md" {
+		t.Fatalf("a wiki entry must be found by its name: %+v", hits)
 	}
 }
 
@@ -194,7 +183,7 @@ func TestOldSchemaIsRebuilt(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "index.db")
 	d, _ := Open(path)
 	d.Exec(`PRAGMA user_version = 1`)
-	d.Exec(`INSERT INTO nodes(id,kind,project,path,title,status,retired_reason,superseded_by,pinned,note_kind,created_at,updated_at,content_hash) VALUES('x','wiki','p','p','t','active','','',0,'','','','h')`)
+	d.Exec(`INSERT INTO nodes(id,kind,project,path,title,pinned,note_kind,created_at,updated_at,content_hash) VALUES('x','wiki','p','p','t',0,'','','','h')`)
 	d.Close()
 	d, err := Open(path)
 	if err != nil {
@@ -209,7 +198,7 @@ func TestOldSchemaIsRebuilt(t *testing.T) {
 }
 
 func TestBestKeywordHitsKeepAPlace(t *testing.T) {
-	repo, _ := fixture(t)
+	repo := fixture(t)
 	// The exact entry holds the identifier and little else. Ten others repeat the query's ordinary words, so they are
 	// closer to the query in meaning and also match its words; only the exact entry matches the rare identifier.
 	write(t, repo, "wiki/alpha/exact.md", "# Exact\n\nquux_handler_7 is a thing.\n")
@@ -242,7 +231,7 @@ func (s *slowEmbedder) Query(ctx context.Context, text string) ([]float32, error
 }
 
 func TestHungEmbedderFallsBackToKeywordsQuickly(t *testing.T) {
-	repo, _ := fixture(t)
+	repo := fixture(t)
 	d := openDB(t)
 	d.Rescan(repo)
 	good := &bagEmbedder{model: "bag"}
@@ -266,7 +255,7 @@ func TestHungEmbedderFallsBackToKeywordsQuickly(t *testing.T) {
 }
 
 func TestPruneIsSafe(t *testing.T) {
-	repo, _ := fixture(t)
+	repo := fixture(t)
 	d := openDB(t)
 	// an empty index must not delete the vector cache
 	d.Exec(`INSERT INTO vec.vectors(text_hash, model, dim, vec) VALUES('h1','bag',2,x'0000000000000000')`)
@@ -288,19 +277,12 @@ func TestPruneIsSafe(t *testing.T) {
 	}
 }
 
-func TestRetiredNodesAreNotEmbeddedAndTopKGuardsK(t *testing.T) {
-	repo, _ := fixture(t)
+func TestTopKGuardsK(t *testing.T) {
+	repo := fixture(t)
 	d := openDB(t)
 	d.Rescan(repo)
 	e := &bagEmbedder{model: "bag"}
 	d.EmbedPending(context.Background(), e, nil)
-	var retiredText string
-	d.QueryRow(`SELECT c.text FROM chunks c JOIN nodes n ON n.id=c.node_id WHERE n.status='retired'`).Scan(&retiredText)
-	var has int
-	d.QueryRow(`SELECT count(*) FROM vec.vectors v JOIN chunks c ON c.text_hash=v.text_hash JOIN nodes n ON n.id=c.node_id WHERE n.status='retired'`).Scan(&has)
-	if has != 0 {
-		t.Fatal("a retired note was embedded")
-	}
 	m, _ := d.LoadMatrix("bag")
 	if ids, err := m.TopK(make([]float32, m.Dim), 0, Filter{}); err != nil || ids != nil {
 		t.Fatalf("k=0 must return nothing: %v %v", ids, err)
@@ -308,7 +290,7 @@ func TestRetiredNodesAreNotEmbeddedAndTopKGuardsK(t *testing.T) {
 }
 
 func TestVectorFileSurvivesAReplacedConnection(t *testing.T) {
-	repo, _ := fixture(t)
+	repo := fixture(t)
 	d := openDB(t)
 	d.Rescan(repo)
 	d.EmbedPending(context.Background(), &bagEmbedder{model: "bag"}, nil)

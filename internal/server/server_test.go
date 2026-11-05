@@ -157,9 +157,6 @@ func TestRecallThreeEmptyStatesAndAHit(t *testing.T) {
 	if !strings.Contains(out, "[wiki wiki/proj/ports.md::Daemon] ") || !strings.Contains(out, "8765") {
 		t.Fatalf("no wiki hit:\n%s", out)
 	}
-	if !strings.Contains(out, "[code: not built for proj]") {
-		t.Fatalf("empty layer must say 'not built':\n%s", out)
-	}
 	if !strings.Contains(out, "[memory: not built for proj]") {
 		t.Fatalf("empty memory layer must say 'not built':\n%s", out)
 	}
@@ -186,8 +183,39 @@ func TestEmbedderDownIsAnUnavailableLineNotAnError(t *testing.T) {
 	if !strings.Contains(st, "embedder: unavailable") {
 		t.Fatalf("stats must report the embedder state:\n%s", st)
 	}
-	if _, isErr := call(t, s, "learn", map[string]any{"text": "A note while down.", "kind": "k"}); !isErr {
-		t.Fatal("learn must fail loudly while the embedder is down")
+	if id, isErr := call(t, s, "learn", map[string]any{"text": "A note about the zorblax cache written while down.", "project": "proj", "kind": "k"}); isErr || len(id) < 36 {
+		t.Fatalf("learn must succeed while the embedder is down: %q %v", id, isErr)
+	}
+	out, _ = call(t, s, "recall", map[string]any{"query": "zorblax cache", "project": "proj", "layer": "memory"})
+	if !strings.Contains(out, "zorblax") {
+		t.Fatalf("a note written while the embedder was down must be found by keyword:\n%s", out)
+	}
+	if st := srv.Stats(context.Background(), StatsIn{}); !strings.Contains(st, "embedder: unavailable") {
+		t.Fatalf("stats must still report the embedder as unavailable:\n%s", st)
+	}
+}
+
+func TestRecallLayersAreWikiMemoryAndFactOnly(t *testing.T) {
+	s, _, _, _, _ := setup(t)
+	call(t, s, "learn", map[string]any{"text": "A note about the quuxlet scheduler.", "project": "proj", "kind": "k"})
+	call(t, s, "fact_add", map[string]any{"text": "The quuxlet scheduler is owned by the platform team.", "project": "proj"})
+	out, _ := call(t, s, "recall", map[string]any{"query": "quuxlet scheduler", "project": "proj"})
+	for _, l := range strings.Split(out, "\n") {
+		if !strings.HasPrefix(l, "[wiki") && !strings.HasPrefix(l, "[memory") && !strings.HasPrefix(l, "[global memory") {
+			t.Fatalf("auto recall gave a line outside wiki and memory: %q\n%s", l, out)
+		}
+	}
+	if !strings.Contains(out, "[memory ") {
+		t.Fatalf("no memory hit:\n%s", out)
+	}
+	if out, _ = call(t, s, "recall", map[string]any{"query": "quuxlet scheduler", "project": "proj", "layer": "fact"}); !strings.Contains(out, "[fact ") || strings.Contains(out, "[memory") {
+		t.Fatalf("fact layer:\n%s", out)
+	}
+	if out, _ = call(t, s, "recall", map[string]any{"query": "quuxlet", "layer": "memory"}); !strings.Contains(out, "[memory ") {
+		t.Fatalf("memory layer:\n%s", out)
+	}
+	if out, _ = call(t, s, "recall", map[string]any{"query": "quuxlet", "layer": "code"}); !strings.Contains(out, "unknown layer") || strings.Contains(out, "code,") {
+		t.Fatalf("code must be an unknown layer:\n%s", out)
 	}
 }
 
@@ -208,16 +236,15 @@ func TestLearnRecallRetireRoundTrip(t *testing.T) {
 	if out, _ := call(t, s, "feedback", map[string]any{"id": short, "rating": "maybe", "session": "s1"}); !strings.Contains(out, "nothing recorded") {
 		t.Fatalf("%s", out)
 	}
-	if out, _ := call(t, s, "retire", map[string]any{"id": short, "reason": "obsolete", "project": "proj"}); !strings.HasPrefix(out, "retired "+short) {
+	if out, _ := call(t, s, "retire", map[string]any{"id": short, "reason": "obsolete", "project": "proj"}); !strings.HasPrefix(out, "deleted "+short) {
 		t.Fatalf("%s", out)
 	}
 	out, _ = call(t, s, "recall", map[string]any{"query": "weekly job sunday", "project": "proj", "layer": "memory"})
 	if strings.Contains(out, "#"+short+"]") {
 		t.Fatalf("retired note is still recalled:\n%s", out)
 	}
-	out, _ = call(t, s, "recall", map[string]any{"query": "weekly job sunday", "project": "proj", "layer": "memory", "include_archived": true})
-	if !strings.Contains(out, "(retired)") {
-		t.Fatalf("include_archived must show the retired note, labelled:\n%s", out)
+	if _, err := os.Stat(filepath.Join(repo, "notes", "proj", id+".md")); !os.IsNotExist(err) {
+		t.Fatalf("the retired note's file must be gone: %v", err)
 	}
 	fact, _ := call(t, s, "fact_add", map[string]any{"text": "The owner prefers short answers.", "category": "user_pref"})
 	if len(fact) < 36 {
