@@ -24,6 +24,11 @@ const (
 	MaxRelated = 5
 	// MaxRelatedBody is the largest page (bytes) that is handed over whole as a related page.
 	MaxRelatedBody = 40000
+	// NotePages is the number of pages each note votes for in the choice of related pages.
+	NotePages = 3
+	// NoteFloor is the lowest cosine at which a page gets a note's vote. Without it a wiki of a few pages would hand
+	// over pages that have nothing to do with the notes. Like the other meaning constants it is open to the evaluation.
+	NoteFloor = 0.5
 	// queryNote is how much of each note goes into the query that finds related pages.
 	queryNote = 300
 	// UnsortedTitle is the page that takes the notes a merge could not place.
@@ -240,7 +245,9 @@ func Pending(ctx context.Context, st *store.Store, project string, max int) ([]B
 		if b.Pages == nil {
 			b.Pages = []PageRef{}
 		}
-		b.Related = relatedPages(ctx, st, p, strings.Join(q, "\n"))
+		if b.Related = relatedByMeaning(ctx, st, p, ns); b.Related == nil {
+			b.Related = relatedPages(ctx, st, p, strings.Join(q, "\n"))
+		}
 		b.Prompt = BuildPrompt(b)
 		out = append(out, b)
 	}
@@ -252,6 +259,100 @@ func truncateRunes(s string, n int) string {
 		return string(r[:n])
 	}
 	return s
+}
+
+// relatedByMeaning chooses the related pages by vectors: each note votes for the NotePages pages of the project whose
+// best chunk is closest to it; pages are ranked by votes, then by their best score. A note's vector is the stored
+// one when the note is indexed with vectors, else it is embedded. A page needs a cosine of NoteFloor to get a vote. It
+// returns nil (the caller falls back to keywords) when there is no embedder, no vectors, or no note has a vector.
+func relatedByMeaning(ctx context.Context, st *store.Store, project string, ns []waitingNote) []Related {
+	if st.Emb == nil {
+		return nil
+	}
+	m, err := st.DB.LoadMatrix(st.Emb.ID())
+	if err != nil || len(m.IDs) == 0 {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, index.NodeVectorTimeout)
+	defer cancel()
+	type tally struct {
+		votes int
+		best  float32
+	}
+	tallies := map[string]*tally{}
+	embedderOK, voted := true, false
+	for _, n := range ns {
+		var emb index.Embedder = st.Emb
+		if !embedderOK {
+			emb = nil
+		}
+		v, err := st.DB.NodeVector(ctx, emb, "notes/"+project+"/"+n.ID)
+		if err != nil && embedderOK {
+			if vs, derr := st.Emb.Docs(ctx, []string{n.Text}); derr == nil && len(vs) == 1 && len(vs[0]) == m.Dim {
+				v, err = vs[0], nil // embedders return unit vectors
+			} else if derr != nil {
+				embedderOK = false // do not wait for a dead embedder once per note
+			}
+		}
+		if err != nil || len(v) != m.Dim {
+			continue
+		}
+		top, err := m.BestPages(v, project, NotePages)
+		if err != nil {
+			return nil
+		}
+		for _, ps := range top {
+			if ps.Score < NoteFloor {
+				continue
+			}
+			voted = true
+			t := tallies[ps.NodeID]
+			if t == nil {
+				t = &tally{}
+				tallies[ps.NodeID] = t
+			}
+			t.votes++
+			if ps.Score > t.best {
+				t.best = ps.Score
+			}
+		}
+	}
+	if !voted {
+		return nil
+	}
+	ids := make([]string, 0, len(tallies))
+	for id := range tallies {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool {
+		a, b := tallies[ids[i]], tallies[ids[j]]
+		if a.votes != b.votes {
+			return a.votes > b.votes
+		}
+		if a.best != b.best {
+			return a.best > b.best
+		}
+		return ids[i] < ids[j]
+	})
+	out := []Related{}
+	for _, id := range ids {
+		if len(out) == MaxRelated {
+			break
+		}
+		if r, ok := readRelated(st.Repo, id+".md"); ok {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// readRelated reads the page at path (under the repository) as a Related; a page over MaxRelatedBody is skipped.
+func readRelated(repo, path string) (Related, bool) {
+	raw, err := os.ReadFile(filepath.Join(repo, filepath.FromSlash(path)))
+	if err != nil || len(raw) > MaxRelatedBody {
+		return Related{}, false
+	}
+	return Related{Title: strings.TrimSuffix(filepath.Base(path), ".md"), Hash: Hash(raw), Body: md.Parse(raw).Body}, true
 }
 
 // relatedPages finds the existing pages of the project that the query is closest to, by the hybrid recall (keywords
@@ -277,11 +378,9 @@ func relatedPages(ctx context.Context, st *store.Store, project, query string) [
 		if strings.EqualFold(title, wiki.IndexTitle) || strings.EqualFold(title, UnsortedTitle) {
 			continue
 		}
-		raw, err := os.ReadFile(filepath.Join(st.Repo, filepath.FromSlash(h.Path)))
-		if err != nil || len(raw) > MaxRelatedBody {
-			continue
+		if r, ok := readRelated(st.Repo, h.Path); ok {
+			out = append(out, r)
 		}
-		out = append(out, Related{Title: title, Hash: Hash(raw), Body: md.Parse(raw).Body})
 	}
 	return out
 }
