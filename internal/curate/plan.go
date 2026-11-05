@@ -78,10 +78,8 @@ func (w *world) plan(sub Submission, ids [][]string) (jobs []*pageJob, unknown [
 // place decides what can be said about a page before its text is checked: refused, stale, or a candidate.
 func (w *world) place(j *pageJob, titles map[string]bool) error {
 	p, fold := j.in, wiki.Fold(j.in.Title)
-	if err := wiki.ValidTitle(p.Title); err != nil {
+	if err := wiki.ValidModelTitle(p.Title); err != nil {
 		j.mark(Refused, err.Error())
-	} else if fold == wiki.Fold(UnsortedTitle) {
-		j.mark(Refused, `the title "Unsorted" belongs to the service`)
 	} else if titles[fold] {
 		j.mark(Refused, "two pages of this submission have the same title")
 	}

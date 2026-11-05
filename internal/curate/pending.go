@@ -33,7 +33,7 @@ const (
 	// queryNote is how much of each note goes into the query that finds related pages.
 	queryNote = 300
 	// UnsortedTitle is the page that takes the notes a merge could not place.
-	UnsortedTitle = "Unsorted"
+	UnsortedTitle = wiki.UnsortedTitle
 )
 
 // PageRef is one existing page: its title, one-line summary and path under the repository.
@@ -206,7 +206,7 @@ func pageFiles(repo, project string) ([]PageRef, error) {
 		return nil
 	})
 	sort.SliceStable(out, func(i, j int) bool {
-		a, b := strings.ToLower(out[i].Title), strings.ToLower(out[j].Title)
+		a, b := wiki.Fold(out[i].Title), wiki.Fold(out[j].Title)
 		if a != b {
 			return a < b
 		}
@@ -399,7 +399,7 @@ func relatedPages(ctx context.Context, st *store.Store, project, query string) [
 		}
 		seen[h.NodeID] = true
 		title := strings.TrimSuffix(filepath.Base(h.Path), ".md")
-		if wiki.Fold(title) == wiki.Fold(wiki.IndexTitle) || wiki.Fold(title) == wiki.Fold(UnsortedTitle) {
+		if wiki.IsSpecial(title) {
 			continue
 		}
 		if r, ok := readRelated(st.Repo, h.Path); ok {

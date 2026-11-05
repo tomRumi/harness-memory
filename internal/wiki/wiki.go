@@ -19,6 +19,9 @@ import (
 // no curated page may take it.
 const IndexTitle = "Index"
 
+// UnsortedTitle is the page the service itself writes the notes of a failed merge to.
+const UnsortedTitle = "Unsorted"
+
 // MaxTitle is the longest title, in characters.
 const MaxTitle = 100
 
@@ -60,6 +63,23 @@ func ValidTitle(title string) error {
 		}
 	}
 	return nil
+}
+
+// ValidModelTitle is ValidTitle for a page a model writes: the name of the service's own Unsorted page is reserved too.
+func ValidModelTitle(title string) error {
+	if err := ValidTitle(title); err != nil {
+		return err
+	}
+	if Fold(title) == Fold(UnsortedTitle) {
+		return fmt.Errorf("the title %q belongs to the service", UnsortedTitle)
+	}
+	return nil
+}
+
+// IsSpecial says whether title is the Index page or the Unsorted page: pages that are lists, not subjects.
+func IsSpecial(title string) bool {
+	f := Fold(title)
+	return f == Fold(IndexTitle) || f == Fold(UnsortedTitle)
 }
 
 func truncate(s string) string {
@@ -226,7 +246,7 @@ func Cap(s string, n int) string {
 
 func sortEntries(es []Entry) {
 	sort.SliceStable(es, func(i, j int) bool {
-		a, b := strings.ToLower(es[i].Name), strings.ToLower(es[j].Name)
+		a, b := Fold(es[i].Name), Fold(es[j].Name)
 		if a != b {
 			return a < b
 		}

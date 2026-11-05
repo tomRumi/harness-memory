@@ -47,8 +47,7 @@ type PagePair struct {
 
 // IsSpecialPage says whether the wiki node id is an Index or an Unsorted page: pages that are lists, not subjects.
 func IsSpecialPage(id string) bool {
-	t := pageTitle(id)
-	return wiki.Fold(t) == wiki.Fold(wiki.IndexTitle) || wiki.Fold(t) == "unsorted"
+	return wiki.IsSpecial(pageTitle(id))
 }
 
 func pageTitle(id string) string { return id[strings.LastIndex(id, "/")+1:] }

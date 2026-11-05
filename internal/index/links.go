@@ -300,7 +300,7 @@ func (d *DB) BuildIndexPage(project string) (string, error) {
 		if err := rows.Scan(&id, &stem, &summary); err != nil {
 			return "", err
 		}
-		if strings.EqualFold(id, self+wiki.IndexTitle) { // the index never lists itself
+		if wiki.Fold(id) == wiki.Fold(self+wiki.IndexTitle) { // the index never lists itself
 			continue
 		}
 		es = append(es, wiki.Entry{Name: stem, Summary: summary})
