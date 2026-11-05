@@ -21,11 +21,6 @@ type RepoState struct {
 	Err           error    // git could not say what is staged
 }
 
-// Blocked says whether commits wait.
-func (s RepoState) Blocked() bool {
-	return s.IndexLock || s.MergeOrRebase || s.Detached || len(s.Foreign) > 0 || s.Err != nil
-}
-
 // State reads the state of the repository.
 func State(repo string) RepoState {
 	g := filepath.Join(repo, ".git")
