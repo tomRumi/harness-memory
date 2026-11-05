@@ -46,3 +46,21 @@ func TestInitDoesNotMakeAnUnusedRawDirectory(t *testing.T) {
 		t.Error("raw/ was created")
 	}
 }
+
+// init commits the .gitignore it made together with the repository: git status is clean afterwards.
+func TestInitCommitsItsGitignore(t *testing.T) {
+	f := newFake(t, true)
+	env(t, f.URL)
+	p := paths(t)
+	runInit(t, p, InitOptions{})
+	if out, _ := exec.Command("git", "-C", p.Repo, "status", "--porcelain").CombinedOutput(); strings.TrimSpace(string(out)) != "" {
+		t.Errorf("git status after init: %q", out)
+	}
+	if out, err := exec.Command("git", "-C", p.Repo, "ls-files", ".gitignore").Output(); err != nil || strings.TrimSpace(string(out)) != ".gitignore" {
+		t.Errorf(".gitignore is not committed: %q %v", out, err)
+	}
+	runInit(t, p, InitOptions{}) // twice: still one commit, still clean
+	if out, _ := exec.Command("git", "-C", p.Repo, "rev-list", "--count", "HEAD").Output(); strings.TrimSpace(string(out)) != "1" {
+		t.Errorf("commits after a second init: %s", out)
+	}
+}

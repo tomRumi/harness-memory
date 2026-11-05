@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -180,5 +181,81 @@ func TestDocumentsSayWhatTheProgramDoes(t *testing.T) {
 	}
 	if s := read("docs/reference.md"); !strings.Contains(s, "golang.org/x/text") || strings.Contains(s, "retired by the merge") {
 		t.Error("reference: dependency table or retire text")
+	}
+}
+
+// The next writing command commits what a killed run left behind (an accented page and a note deletion).
+func TestNextWritingCommandCommitsLeftovers(t *testing.T) {
+	home, repo, ids := curateFixture(t)
+	os.Remove(filepath.Join(repo, "notes", "other", ids[3]+".md"))
+	os.MkdirAll(filepath.Join(repo, "wiki", "other"), 0o755)
+	os.WriteFile(filepath.Join(repo, "wiki", "other", "Étude.md"), []byte("# Étude\n\nA note of another project that is waiting to be merged somewhere.\n"), 0o644)
+	if _, e, c := hms(t, home, deadURL(), []string{"HMS_VECTORS=0"}, "", "wiki", "index", "-p", "proj"); c != 0 {
+		t.Fatalf("wiki index: %s", e)
+	}
+	if s := strings.TrimSpace(gitIn(t, repo, "status", "--porcelain", "-uall")); s != "" {
+		t.Errorf("left loose by the next command: %q", s)
+	}
+	if !strings.Contains(gitIn(t, repo, "-c", "core.quotepath=false", "log", "--name-status", "--format=", "-3"), "Étude.md") {
+		t.Error("the accented page is in no commit")
+	}
+}
+
+// Item 3: the kill script (a real SIGKILL during the slow copy check).
+func TestCrashScript(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 is needed by the script")
+	}
+	out, err := exec.Command("sh", filepath.Join("..", "..", "scripts", "test", "crash.sh")).CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "PASS") {
+		t.Fatalf("crash.sh: %v\n%s", err, out)
+	}
+}
+
+// Items 6 and 10: the recipe says what to do with an unclean repository, and the documents claim only what is true.
+func TestRecipeAndDocumentsAfterTheSecondReview(t *testing.T) {
+	read := func(rel string) string {
+		b, err := os.ReadFile(filepath.Join("..", "..", filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	recipe, design := read("integrations/curation-by-a-harness.md"), read("docs/design.md")
+	for name, text := range map[string]string{"recipe": recipe, "design.md": design} {
+		for _, want := range []string{"git status --porcelain", "untracked", "rebase", "detached", "hms doctor", "FAIL", "git rebase --abort"} {
+			if !strings.Contains(text, want) {
+				t.Errorf("%s lacks %q", name, want)
+			}
+		}
+	}
+	// the numbered step 1 and the prompt both carry the rule, and the Conflicts paragraph follows the prompt
+	steps, prompt, _ := strings.Cut(recipe, "## The job prompt")
+	if !strings.Contains(steps, "1. Check the repository first") || !strings.Contains(prompt, "git status --porcelain") || !strings.Contains(prompt, "hms doctor") {
+		t.Error("step 1 and the prompt are not in sync")
+	}
+	if !strings.Contains(recipe, "## Conflicts") || strings.Index(recipe, "## Conflicts") < strings.Index(recipe, "## The job prompt") {
+		t.Error("no Conflicts paragraph after the prompt")
+	}
+	readme, ref, hermes := read("README.md"), read("docs/reference.md"), read("integrations/hermes/README.md")
+	for name, text := range map[string]string{"README": readme, "reference": ref, "design": design, "recipe": recipe} {
+		for _, bad := range []string{"checks that nothing was lost", "every note's words and numbers arrived", "so nothing is lost", "the index and the settings", "One committer makes the commits", "Python"} {
+			if strings.Contains(text, bad) {
+				t.Errorf("%s still says %q", name, bad)
+			}
+		}
+	}
+	if strings.Contains(hermes, "unchanged") {
+		t.Error("hermes README still says the prompt ran unchanged")
+	}
+	for _, want := range []string{"8-word run", "core.hooksPath scripts/hooks", "goes to Unsorted"} {
+		if !strings.Contains(readme, want) {
+			t.Errorf("README lacks %q", want)
+		}
+	}
+	for _, want := range []string{"core.hooksPath scripts/hooks", "One committer per process", "200 bytes", "`Unsorted`", "case-insensitively and Unicode-normalised"} {
+		if !strings.Contains(ref, want) {
+			t.Errorf("reference lacks %q", want)
+		}
 	}
 }
