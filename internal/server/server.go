@@ -360,7 +360,7 @@ type FactIn struct {
 	Trust    float64 `json:"trust,omitempty" jsonschema:"0 to 1, default 0.5"`
 }
 type WikiReadIn struct {
-	Path string `json:"path" jsonschema:"path under wiki/, for example project/modules/rag.md"`
+	Path string `json:"path" jsonschema:"path under wiki/ (project/Page Title.md) or a page title (Page Title, or project/Page Title)"`
 }
 type RetireIn struct {
 	ID      string `json:"id" jsonschema:"short id recall prints, or a unique prefix of it (at least 4 characters)"`
@@ -390,7 +390,7 @@ func (s *Server) Handler() http.Handler {
 				}
 				return text(id)
 			})
-		mcp.AddTool(m, &mcp.Tool{Name: "wiki_read", Description: "Read one wiki entry in full by its path under wiki/."},
+		mcp.AddTool(m, &mcp.Tool{Name: "wiki_read", Description: "Read one wiki page in full by its path under wiki/ or by its title. The answer ends with the pages it links to and the pages that link to it."},
 			func(ctx context.Context, _ *mcp.CallToolRequest, in WikiReadIn) (*mcp.CallToolResult, any, error) {
 				t, err := s.St.WikiRead(in.Path)
 				if err != nil {

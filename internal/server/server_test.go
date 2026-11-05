@@ -395,3 +395,26 @@ func TestCatchUpEmbedsPendingChunksAfterTheEmbedderComesUp(t *testing.T) {
 		t.Fatal("the loop must stop when its context ends")
 	}
 }
+
+func TestWikiReadByTitleAndRecallShowTitlesWithSpacesAndAccents(t *testing.T) {
+	sess, srv, repo, _, _ := setup(t)
+	rel := "wiki/proj/Őrzés és Café.md"
+	os.WriteFile(filepath.Join(repo, rel), []byte("---\nsummary: Egy oldal\n---\n\n## Rész\nA quokkamarker szöveg, lásd [[ports]].\n"), 0o644)
+	if err := srv.St.DB.Upsert(repo, rel); err != nil {
+		t.Fatal(err)
+	}
+	out, isErr := call(t, sess, "recall", map[string]any{"query": "quokkamarker", "project": "proj", "layer": "wiki"})
+	if isErr || !strings.Contains(out, "[wiki wiki/proj/Őrzés és Café.md::Rész] ") {
+		t.Fatalf("recall:\n%s", out)
+	}
+	for _, in := range []string{"proj/Őrzés és Café.md", "őrzés ÉS café", "proj/őrzés és café"} {
+		got, isErr := call(t, sess, "wiki_read", map[string]any{"path": in})
+		if isErr || !strings.Contains(got, "quokkamarker") || !strings.HasSuffix(got, "Links to: [[ports]]\n") {
+			t.Fatalf("wiki_read(%q) = %q %v", in, got, isErr)
+		}
+	}
+	got, _ := call(t, sess, "wiki_read", map[string]any{"path": "Ports"})
+	if !strings.HasSuffix(got, "Linked from: [[Őrzés és Café]]\n") {
+		t.Fatalf("backlink:\n%s", got)
+	}
+}
