@@ -202,10 +202,10 @@ func TestLearnRecallRetireRoundTrip(t *testing.T) {
 	if !strings.Contains(out, "#"+short) || !strings.Contains(out, "vpn") {
 		t.Fatalf("learned note not recalled with its id:\n%s", out)
 	}
-	if out, _ := call(t, s, "feedback", map[string]any{"id": short, "rating": "helpful", "project": "proj"}); !strings.Contains(out, "helpful 1") {
+	if out, _ := call(t, s, "feedback", map[string]any{"id": short, "rating": "helpful", "session": "s1", "project": "proj"}); !strings.Contains(out, "helpful 1") {
 		t.Fatalf("%s", out)
 	}
-	if out, _ := call(t, s, "feedback", map[string]any{"id": short, "rating": "maybe"}); !strings.Contains(out, "nothing recorded") {
+	if out, _ := call(t, s, "feedback", map[string]any{"id": short, "rating": "maybe", "session": "s1"}); !strings.Contains(out, "nothing recorded") {
 		t.Fatalf("%s", out)
 	}
 	if out, _ := call(t, s, "retire", map[string]any{"id": short, "reason": "obsolete", "project": "proj"}); !strings.HasPrefix(out, "retired "+short) {

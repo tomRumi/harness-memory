@@ -293,8 +293,8 @@ func TestSupersedeRetireAndFeedback(t *testing.T) {
 	}
 	// feedback
 	f1, _ := st.Learn(ctx, "A note to be rated several times over.", "fb", "k", "")
-	st.Feedback(f1[:8], true, "fb")
-	msg, _ := st.Feedback(f1[:8], false, "fb")
+	st.Feedback(f1[:8], true, "fb", "s1")
+	msg, _ := st.Feedback(f1[:8], false, "fb", "s2")
 	if !strings.Contains(msg, "helpful 1, unhelpful 1") {
 		t.Fatalf("%q", msg)
 	}
@@ -513,5 +513,42 @@ func TestAFileChangedAfterACommitIsCommittedAgain(t *testing.T) {
 	out, _ := exec.Command("git", "-C", repo, "status", "--porcelain").CombinedOutput()
 	if strings.TrimSpace(string(out)) != "" || c.Commits() != 2 {
 		t.Fatalf("commits %d, status %q", c.Commits(), out)
+	}
+}
+
+func TestRatingsCountSessionsNotCalls(t *testing.T) {
+	st, _, _ := newStore(t)
+	ctx := context.Background()
+	id, _ := st.Learn(ctx, "A note that a looping agent keeps rating as unhelpful again and again.", "fbk", "k", "")
+	node := "notes/fbk/" + id
+	for i := 0; i < 20; i++ {
+		st.Feedback(id[:8], false, "fbk", "loop")
+	}
+	if h, u := st.Ratings(node); h != 0 || u != 1 {
+		t.Fatalf("20 ratings of one session must count once: helpful %d unhelpful %d", h, u)
+	}
+	if msg, _ := st.Feedback(id[:8], false, "fbk", "  "); !strings.Contains(msg, "needs a session") {
+		t.Fatalf("a rating without a session must be refused: %s", msg)
+	}
+	if len(st.RetireCandidates()) != 0 {
+		t.Fatal("one session is not enough to retire a note")
+	}
+	for i := 1; i < RetireAfter; i++ {
+		st.Feedback(id[:8], false, "fbk", fmt.Sprintf("s%d", i))
+	}
+	if c := st.RetireCandidates(); len(c) != 1 || c[0] != node {
+		t.Fatalf("5 distinct sessions must make a candidate: %v", c)
+	}
+	st.Feedback(id[:8], true, "fbk", "s1") // one session changes its mind: it now counts as helpful
+	if c := st.RetireCandidates(); len(c) != 0 {
+		t.Fatalf("a helpful rating blocks retirement: %v", c)
+	}
+	st.Feedback(id[:8], false, "fbk", "s1") // and back: the last rating of the session is what counts
+	if c := st.RetireCandidates(); len(c) != 1 {
+		t.Fatalf("last rating per session: %v", c)
+	}
+	st.Event("restore", node, "fbk", "")
+	if c := st.RetireCandidates(); len(c) != 0 {
+		t.Fatalf("ratings before a restore do not count: %v", c)
 	}
 }

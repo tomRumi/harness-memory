@@ -305,6 +305,7 @@ type RetireIn struct {
 type FeedbackIn struct {
 	ID      string `json:"id" jsonschema:"short id recall printed"`
 	Rating  string `json:"rating" jsonschema:"helpful or unhelpful"`
+	Session string `json:"session" jsonschema:"required: a stable name for this conversation or run; only a session's last rating counts"`
 	Project string `json:"project,omitempty" jsonschema:"restrict the lookup to this project"`
 }
 
@@ -348,13 +349,13 @@ func (s *Server) Handler() http.Handler {
 				}
 				return text(t)
 			})
-		mcp.AddTool(m, &mcp.Tool{Name: "feedback", Description: "Say whether a recalled note helped (helpful or unhelpful)."},
+		mcp.AddTool(m, &mcp.Tool{Name: "feedback", Description: "Say whether a recalled note helped (helpful or unhelpful). A session name is required; each session counts once."},
 			func(ctx context.Context, _ *mcp.CallToolRequest, in FeedbackIn) (*mcp.CallToolResult, any, error) {
 				r := strings.ToLower(strings.TrimSpace(in.Rating))
 				if r != "helpful" && r != "unhelpful" {
 					return text(fmt.Sprintf("rating must be helpful or unhelpful, not %q — nothing recorded", in.Rating))
 				}
-				t, err := s.St.Feedback(in.ID, r == "helpful", in.Project)
+				t, err := s.St.Feedback(in.ID, r == "helpful", in.Project, in.Session)
 				if err != nil {
 					return nil, nil, err
 				}

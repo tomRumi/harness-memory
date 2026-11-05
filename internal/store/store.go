@@ -398,7 +398,20 @@ func truncate(s string, n int) string {
 
 // Feedback records whether a recalled note helped. Ratings go to events.db; they shape recall order and the weekly
 // report (step 7), and never remove a hit by themselves.
-func (s *Store) Feedback(prefix string, helpful bool, proj string) (string, error) {
+// RetireAfter is the number of distinct sessions that must rate a note unhelpful (and none helpful) before it is a
+// candidate for retirement.
+const RetireAfter = 5
+
+// Feedback records a rating of a note or fact by one session. Only the last rating of a session counts, so one agent
+// that repeats itself is one voice, not many.
+func (s *Store) Feedback(prefix string, helpful bool, proj, session string) (string, error) {
+	session = strings.TrimSpace(session)
+	if session == "" {
+		return "feedback needs a session (any stable name for this conversation or run) — nothing recorded", nil
+	}
+	if len(session) > 100 {
+		session = session[:100]
+	}
 	if proj != "" {
 		var err error
 		if proj, err = project(proj); err != nil {
@@ -415,29 +428,66 @@ func (s *Store) Feedback(prefix string, helpful bool, proj string) (string, erro
 	}
 	var p string
 	s.DB.QueryRow(`SELECT project FROM nodes WHERE id=?`, id).Scan(&p)
-	s.Event(kind, id, p, "")
+	s.Event(kind, id, p, session)
 	h, u := s.Ratings(id)
-	return fmt.Sprintf("recorded %s for %s (helpful %d, unhelpful %d)", kind, shortID(id), h, u), nil
+	return fmt.Sprintf("recorded %s for %s (sessions: helpful %d, unhelpful %d)", kind, shortID(id), h, u), nil
 }
 
-// Ratings returns how often a node was rated helpful and unhelpful.
+// Ratings returns how many sessions rated a node helpful and unhelpful, by each session's last rating since the
+// node was last restored.
 func (s *Store) Ratings(id string) (helpful, unhelpful int) {
-	rows, err := s.ev.Query(`SELECT kind, count(*) FROM events WHERE node_id=? AND kind IN ('helpful','unhelpful') GROUP BY kind`, id)
+	rows, err := s.ev.Query(`SELECT kind, detail FROM events WHERE node_id=? AND kind IN ('helpful','unhelpful','restore') ORDER BY rowid`, id)
 	if err != nil {
 		return
 	}
 	defer rows.Close()
+	last := map[string]string{}
 	for rows.Next() {
-		var k string
-		var n int
-		rows.Scan(&k, &n)
+		var k, d string
+		rows.Scan(&k, &d)
+		if k == "restore" {
+			last = map[string]string{} // only ratings after a restore count
+			continue
+		}
+		last[d] = k
+	}
+	for _, k := range last {
 		if k == "helpful" {
-			helpful = n
+			helpful++
 		} else {
-			unhelpful = n
+			unhelpful++
 		}
 	}
 	return
+}
+
+// RetireCandidates lists notes (not facts, not wiki entries) that at least RetireAfter distinct sessions rated
+// unhelpful and no session rated helpful. It only lists; the curation owner decides what to do (step 7).
+func (s *Store) RetireCandidates() []string {
+	rows, err := s.ev.Query(`SELECT DISTINCT node_id FROM events WHERE kind='unhelpful' AND node_id LIKE 'notes/%'`)
+	if err != nil {
+		return nil
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		rows.Scan(&id)
+		ids = append(ids, id)
+	}
+	rows.Close()
+	var out []string
+	for _, id := range ids {
+		var status string
+		s.DB.QueryRow(`SELECT status FROM nodes WHERE id=?`, id).Scan(&status)
+		if status != "active" {
+			continue
+		}
+		if h, u := s.Ratings(id); h == 0 && u >= RetireAfter {
+			out = append(out, id)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // WikiRead returns a wiki entry by its path under wiki/, for example project/modules/rag.md or wiki/project/page.md.
