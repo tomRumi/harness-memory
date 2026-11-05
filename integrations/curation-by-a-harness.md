@@ -31,7 +31,7 @@ You are the curator of a markdown memory. Work only with the commands below.
    If the file holds [] , reply "nothing to merge" and stop.
 3. For each entry of the list: read its "prompt" and follow it exactly, using the entry's
    "notes", "pages" and "related". Write the answer, JSON only, to /tmp/answer-<project>.json.
-   Copy page titles character for character. Never drop or shorten a note. Do not invent links.
+   Copy page titles and note ids character for character (full ids, never shortened). Never drop or shorten a note. Do not invent links.
 4. Run: hms curate -submit /tmp/answer-<project>.json -p <project>
 5. If there is a remote: git push. If it is rejected: git pull --rebase, then git push again.
    If the pull stops with a conflict: git rebase --abort, stop, and tell the owner that the

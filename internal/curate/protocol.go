@@ -94,7 +94,7 @@ Place every note into the best page: an existing page given in "related", or a n
 - Use [[Page Title]] links only to titles listed in "pages" or to pages you create in this same answer. Copy a title character for character from "pages" (underscores and capitals included); when unsure, write no link.
 - A note must arrive whole: every item, number and range of it, even when it is long. Do not summarise a note and do not drop the end of it.
 - Give each new page a short plain title (no slash, no leading dot, at most 100 characters; not "Index" or "Unsorted") and a one-line summary.
-- Assign every note to exactly one page by listing its id in that page's "notes".
+- Assign every note to exactly one page by listing its id in that page's "notes". Copy each id in full, exactly as it appears in the note (never a shortened id).
 - For an existing page, copy "base_hash" from "related"; for a new page leave it empty. Do not write frontmatter.
 - Answer with JSON only, no other text.
 
