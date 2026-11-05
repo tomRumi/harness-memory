@@ -50,6 +50,8 @@ func Doctor(p Paths, out io.Writer) (fails int) {
 		line("OK", "index", p.DB+", schema matches")
 	}
 
+	doctorLinks(db, line)
+
 	if !VectorsEnabled() {
 		line("OK", "vectors", "off (HMS_VECTORS=0); embedder not checked")
 	} else {
@@ -62,6 +64,23 @@ func Doctor(p Paths, out io.Writer) (fails int) {
 		doctorRepoState(p.Repo, line)
 	}
 	return fails
+}
+
+// doctorLinks reports the links of wiki pages that lead nowhere or to more than one page.
+func doctorLinks(db *index.DB, line func(level, what, detail string)) {
+	if db == nil {
+		line("WARN", "links", "skipped: no usable index")
+		return
+	}
+	broken, ambiguous, err := db.LinkCounts()
+	switch {
+	case err != nil:
+		line("WARN", "links", "cannot be counted: "+err.Error())
+	case broken+ambiguous > 0:
+		line("WARN", "links", fmt.Sprintf("%d broken, %d ambiguous (list them with `hms wiki links`)", broken, ambiguous))
+	default:
+		line("OK", "links", "0 broken, 0 ambiguous")
+	}
 }
 
 func doctorEmbedder(db *index.DB, line func(level, what, detail string)) {

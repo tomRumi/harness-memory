@@ -270,9 +270,9 @@ func (d *DB) strings(q string, args ...any) ([]string, error) {
 	return out, rows.Err()
 }
 
-// Projects returns the projects that have wiki pages, sorted.
+// Projects returns the projects that have wiki pages, sorted (pages directly under wiki/ belong to no project).
 func (d *DB) Projects() ([]string, error) {
-	return d.strings(`SELECT DISTINCT project FROM nodes WHERE kind='wiki' ORDER BY project`)
+	return d.strings(`SELECT DISTINCT project FROM nodes WHERE kind='wiki' AND project<>'' ORDER BY project`)
 }
 
 // BuildIndexPage returns the markdown of wiki/<project>/Index.md: one line per page of the project, by title,

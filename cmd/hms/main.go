@@ -38,6 +38,8 @@ usage: hms [--home DIR] [--repo DIR] [--db FILE] <command> [arguments]
                                recall; keyword and vector search together (HMS_VECTORS=0 or -vectors=false: keywords only)
   bench <questions.json> ...   recall latency over the questions' texts (query vector cached, then with embedding)
   serve [-addr A] [-vectors=false]  MCP over HTTP (loopback only) with seven tools: recall learn wiki_read fact_add retire feedback stats
+  wiki links [-p P]            list broken and ambiguous [[links]] of wiki pages (one line each, then a summary); exit 0
+  wiki index [-p P]            write wiki/<project>/Index.md (all projects without -p) when its content changed, and commit it
   stats                        node counts by kind and project, and the vector state
   hash                         digest of everything derived from files
   digests                      one digest per node, as JSON
@@ -384,6 +386,8 @@ func main() {
 		}
 		<-stopped // the last commit is made before the process closes the store
 		<-catchDone
+	case "wiki":
+		os.Exit(wikiCmd(p, rest, os.Stdout, os.Stderr))
 	case "stats":
 		d := open(p)
 		defer d.Close()
@@ -427,6 +431,83 @@ func main() {
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)
 	}
+}
+
+// wikiCmd runs `hms wiki links` and `hms wiki index`. It makes the index match the files first, so that it reports
+// what is on disk now. It returns the exit status.
+func wikiCmd(p paths, args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 || (args[0] != "links" && args[0] != "index") {
+		fmt.Fprintln(stderr, "usage: hms wiki links [-p project] | hms wiki index [-p project]")
+		return 2
+	}
+	fs := flag.NewFlagSet("wiki "+args[0], flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	proj := fs.String("p", "", "project (default: all projects)")
+	if err := fs.Parse(args[1:]); err != nil {
+		return 2
+	}
+	d, err := index.Open(p.db)
+	if err != nil {
+		fmt.Fprintf(stderr, "hms: open index %s: %v\n", p.db, err)
+		return 1
+	}
+	defer d.Close()
+	res, err := d.Rescan(p.repo)
+	if err != nil {
+		fmt.Fprintf(stderr, "hms: rescan: %v\n", err)
+		return 1
+	}
+	for _, w := range res.Warnings {
+		fmt.Fprintln(stderr, "warning:", w)
+	}
+	if args[0] == "links" {
+		ps, err := d.LinkProblems(*proj)
+		if err != nil {
+			fmt.Fprintf(stderr, "hms: %v\n", err)
+			return 1
+		}
+		broken, ambiguous := 0, 0
+		for _, lp := range ps {
+			if lp.Status == "broken" {
+				broken++
+				fmt.Fprintf(stdout, "%s: broken link [[%s]]\n", lp.Page, lp.Link)
+			} else {
+				ambiguous++
+				fmt.Fprintf(stdout, "%s: ambiguous link [[%s]] (could be %s)\n", lp.Page, lp.Link, strings.Join(lp.Matches, ", "))
+			}
+		}
+		fmt.Fprintf(stdout, "links: %d broken, %d ambiguous\n", broken, ambiguous)
+		return 0
+	}
+	projects := []string{*proj}
+	if *proj == "" {
+		if projects, err = d.Projects(); err != nil {
+			fmt.Fprintf(stderr, "hms: %v\n", err)
+			return 1
+		}
+	}
+	com := store.NewCommitter(p.repo, 3*time.Second)
+	st, err := store.New(p.repo, d, nil, com, filepath.Join(p.home, "events.db"))
+	if err != nil {
+		fmt.Fprintf(stderr, "hms: %v\n", err)
+		return 1
+	}
+	defer st.Close() // makes the commit
+	status := 0
+	for _, pr := range projects {
+		rel := "wiki/" + pr + "/Index.md"
+		wrote, err := st.WriteIndexPage(context.Background(), pr)
+		switch {
+		case err != nil:
+			fmt.Fprintf(stderr, "hms: %s: %v\n", rel, err)
+			status = 1
+		case wrote:
+			fmt.Fprintln(stdout, "wrote", rel)
+		default:
+			fmt.Fprintln(stdout, "unchanged", rel)
+		}
+	}
+	return status
 }
 
 func open(p paths) *index.DB {

@@ -250,10 +250,10 @@ func TestDoctorAllFine(t *testing.T) {
 	p := paths(t)
 	runInit(t, p, InitOptions{})
 	out, fails := doctor(t, p)
-	if fails != 0 || strings.Contains(out, "WARN") || strings.Contains(out, "FAIL") || strings.Count(out, "OK") < 7 {
+	if fails != 0 || strings.Contains(out, "WARN") || strings.Contains(out, "FAIL") || strings.Count(out, "OK") < 8 || !strings.Contains(out, "0 broken, 0 ambiguous") {
 		t.Fatalf("fails %d\n%s", fails, out)
 	}
-	for _, w := range []string{"git program", "memory repository", "index", "embedder", "model", "vector size", "chunks without vector", "commits"} {
+	for _, w := range []string{"git program", "memory repository", "index", "embedder", "model", "vector size", "chunks without vector", "commits", "links"} {
 		if !strings.Contains(out, w) {
 			t.Fatalf("no line for %q:\n%s", w, out)
 		}
