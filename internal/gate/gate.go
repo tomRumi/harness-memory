@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode"
 )
 
 const (
@@ -38,11 +39,13 @@ var (
 	reHost     = regexp.MustCompile(`(?i)\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,24}\b`)
 	reIdent    = regexp.MustCompile(`\b[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]+\b|\b[a-z]+[A-Z][A-Za-z0-9]*\b`)
 	reBacktick = regexp.MustCompile("`([^`\n]{2,80})`")
-	reQuoted   = regexp.MustCompile(`"([^"\n]{3,80})"`)
+	reQuoted   = regexp.MustCompile(`(?:^|[\s(\[{:,=])"([^"\s][^"\n]{1,78}[^"\s])"`) // an opening quote follows a space or bracket; a closing quote follows text
 	reDate     = regexp.MustCompile(`\b\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2})?)?\b`)
 	reNumber   = regexp.MustCompile(`\b\d+(?:[.,]\d+)*\b`) // every number, counts included ("10 notes", "3 attempts")
 	reListMark = regexp.MustCompile(`(?m)^\s*\d+[.)]\s`)   // "1. " at the start of a line numbers a list; it is not a value
+	reHex      = regexp.MustCompile(`\b[0-9a-f]{7,40}\b`)  // commit hashes and short ids; kept only when digits and letters both occur
 	reCite     = regexp.MustCompile(`\[\[[^\]]*\]\]`)
+	reBullet   = regexp.MustCompile(`(?m)^\s*(?:[-*+]|\d+[.)])\s+`) // list markers are layout, not words
 )
 
 // body is a section without its citations, whose length counts as content nowhere.
@@ -60,7 +63,7 @@ func has(text, v string) bool {
 		return true
 	}
 	isWord := func(r byte) bool {
-		return r == '_' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= 0x80
+		return r == '_' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z'
 	}
 	for from := 0; from <= len(text)-len(v); {
 		i := strings.Index(text[from:], v)
@@ -70,16 +73,19 @@ func has(text, v string) bool {
 		i += from
 		end := i + len(v)
 		okBefore := i == 0 || !(isWord(text[i-1]) && isWord(v[0]))
-		if i > 0 && text[i-1] == '.' && i > 1 && isWord(text[i-2]) && isWord(v[0]) {
-			okBefore = false // 1.8765 is not 8765
+		if v[0] == '/' && i > 0 && (isWord(text[i-1]) || text[i-1] == '/' || text[i-1] == '~' || text[i-1] == '.') {
+			okBefore = false // /data/backups is not inside /mnt/data/backups
 		}
 		okAfter := end == len(text) || !(isWord(text[end]) && isWord(v[len(v)-1]))
+		if okAfter && strings.Contains(v, "/") && end+1 < len(text) && text[end] == '/' && (isWord(text[end+1]) || text[end+1] == '.' || text[end+1] == '~' || text[end+1] == '-') {
+			okAfter = false // /srv/app is not /srv/app/current
+		}
 		lastWord := isWord(v[len(v)-1])
 		if okAfter && lastWord && end+1 < len(text) && text[end] == '.' && text[end+1] >= '0' && text[end+1] <= '9' {
 			okAfter = false // an address followed by a dot and a digit is a longer value
 		}
-		if okAfter && lastWord && end+1 < len(text) && text[end] == '-' && isWord(text[end+1]) {
-			okAfter = false // a hyphen joins words: port-80x is not port 80
+		if okAfter && lastWord && end+1 < len(text) && text[end] == '-' && text[end+1] >= '0' && text[end+1] <= '9' {
+			okAfter = false // a hyphen before a digit joins numbers: 80-5 is not 80
 		}
 		if okBefore && okAfter {
 			return true
@@ -89,35 +95,102 @@ func has(text, v string) bool {
 	return false
 }
 
+// norm lowercases, drops list markers and turns every character that is not a letter or digit into a space, so that a
+// list written as a paragraph (";" between the items) still contains the same run of words.
 func norm(s string) string {
-	return strings.TrimSpace(spaces.ReplaceAllString(strings.ToLower(s), " "))
+	s = strings.ToLower(reBullet.ReplaceAllString(s, ""))
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			return r
+		}
+		return ' '
+	}, s)
+	return strings.TrimSpace(spaces.ReplaceAllString(s, " "))
+}
+
+// value is one hard value of a text; Tick marks a value that was written in backticks (code formatting may be dropped
+// by a rewrite, so such a value is also accepted as a plain whole word).
+type value struct {
+	V    string
+	Tick bool
+}
+
+func extract(text string) []value {
+	seen := map[string]bool{}
+	var out []value
+	add := func(v string, tick bool) {
+		v = strings.Trim(strings.TrimSpace(v), ".,;:!?")
+		if len(v) < 1 || seen[v] || !strings.ContainsFunc(v, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }) {
+			return // empty, repeated, or only punctuation ("[]", "{}"): not a value
+		}
+		seen[v] = true
+		out = append(out, value{v, tick})
+	}
+	text = strings.ReplaceAll(text, "[[", " ")
+	text = reListMark.ReplaceAllString(text, "")
+	orig := text
+	for _, m := range reURL.FindAllString(text, -1) {
+		add(m, false)
+	}
+	text = reURL.ReplaceAllString(text, " ") // the parts of a URL are not values of their own
+	// longest structure first; each match is blanked, so a value is taken once, whole ("2026-11-03" is a date, not
+	// also 2026, 11 and 03; "~/.hermes/logs/x.json" is a path, not also a host "x.json")
+	for _, re := range []*regexp.Regexp{reDate, reIP, rePort, rePath, reUnit, reVersion, reHost, reIdent} {
+		text = re.ReplaceAllStringFunc(text, func(m string) string {
+			add(m, false)
+			return strings.Repeat(" ", len(m))
+		})
+	}
+	for _, m := range reNumber.FindAllString(text, -1) {
+		add(m, false)
+	}
+	for _, m := range reHex.FindAllString(orig, -1) {
+		if strings.ContainsAny(m, "0123456789") && strings.ContainsAny(m, "abcdef") {
+			add(m, false)
+		}
+	}
+	for _, m := range reBacktick.FindAllStringSubmatch(orig, -1) {
+		add(m[1], true)
+	}
+	for _, m := range reQuoted.FindAllStringSubmatch(orig, -1) {
+		add(`"`+m[1]+`"`, false) // the quotes are part of the value: "noindex" is not "noindex, nofollow"
+	}
+	return out
 }
 
 // HardValues lists the values of text that must not be lost, without duplicates, in order of first appearance.
 func HardValues(text string) []string {
-	seen := map[string]bool{}
 	var out []string
-	add := func(v string) {
-		v = strings.Trim(strings.TrimSpace(v), ".,;:!?")
-		if len(v) < 2 || seen[v] {
-			return
-		}
-		seen[v] = true
-		out = append(out, v)
-	}
-	text = strings.ReplaceAll(text, "[[", " ")
-	text = reListMark.ReplaceAllString(text, "")
-	for _, re := range []*regexp.Regexp{reURL, reDate, reIP, rePort, reVersion, reUnit, reHost, reIdent, rePath, reNumber} {
-		for _, m := range re.FindAllString(text, -1) {
-			add(m)
-		}
-	}
-	for _, re := range []*regexp.Regexp{reBacktick, reQuoted} {
-		for _, m := range re.FindAllStringSubmatch(text, -1) {
-			add(m[1])
-		}
+	for _, v := range extract(text) {
+		out = append(out, v.V)
 	}
 	return out
+}
+
+// holder answers "does this text contain the value as a whole value?": the text is read with the same extraction that
+// found the value, so the two always agree on where a value starts and ends ("/data/backups" is not a value of a text
+// that only has "/mnt/data/backups").
+type holder struct {
+	flatText string
+	set      map[string]bool
+}
+
+func newHolder(text string) holder {
+	h := holder{flatText: flat(text), set: map[string]bool{}}
+	// read as written, and with white space collapsed: a value rewrapped over a line break is still one value
+	for _, src := range []string{text, h.flatText} {
+		for _, v := range extract(src) {
+			h.set[v.V] = true
+		}
+	}
+	return h
+}
+
+func (h holder) has(v value) bool {
+	if h.set[v.V] {
+		return true
+	}
+	return v.Tick && has(h.flatText, v.V)
 }
 
 // Note is one source note of a merge.
@@ -162,10 +235,10 @@ func CheckAppend(notes []Note, section string) (ok bool, problems []string) {
 			problems = append(problems, fmt.Sprintf("no list item or paragraph cites note %s", short(n.ID)))
 			continue
 		}
-		cl := flat(strings.Join(cited, "\n"))
-		for _, v := range HardValues(n.Text) {
-			if !has(cl, v) {
-				problems = append(problems, fmt.Sprintf("note %s: value %q is missing from the item that cites it", short(n.ID), v))
+		ch := newHolder(strings.Join(cited, "\n"))
+		for _, v := range extract(n.Text) {
+			if !ch.has(v) {
+				problems = append(problems, fmt.Sprintf("note %s: value %q is missing from the item that cites it", short(n.ID), v.V))
 			}
 		}
 	}
@@ -192,9 +265,10 @@ func CheckReplace(original, replacement string) (ok bool, problems []string) {
 	if fo != fn || fn%2 != 0 {
 		problems = append(problems, fmt.Sprintf("fence count %d->%d (changed or odd)", fo, fn))
 	}
-	for _, v := range HardValues(original) {
-		if !has(replacement, v) {
-			problems = append(problems, fmt.Sprintf("value %q is missing from the new text", v))
+	rh := newHolder(replacement)
+	for _, v := range extract(original) {
+		if !rh.has(v) {
+			problems = append(problems, fmt.Sprintf("value %q is missing from the new text", v.V))
 		}
 	}
 	return len(problems) == 0, problems
