@@ -34,12 +34,13 @@ var (
 	rePath     = regexp.MustCompile(`(?:~|\.{1,2})?/[A-Za-z0-9._@-]+(?:/[A-Za-z0-9._@-]+)*|\b[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)+\b`)
 	reIP       = regexp.MustCompile(`\b\d{1,3}(?:\.\d{1,3}){3}(?::\d{2,5})?\b`)
 	reVersion  = regexp.MustCompile(`\bv?\d+(?:\.\d+){1,}(?:-[A-Za-z0-9.]+)?\b`)
-	reUnit     = regexp.MustCompile(`\b\d[\d,]*(?:\.\d+)?\s?(?:%|ms|s|sec|min|h|d|GB|MB|KB|TB|GiB|MiB|KiB|x|px|rem|k|M|B)\b`)
-	rePort     = regexp.MustCompile(`(?i)\bport\s+\d{2,5}\b|:\d{2,5}\b`)
+	reUnit     = regexp.MustCompile(`\b\d[\d,]*(?:\.\d+)?\s?(?:%|ms|us|µs|ns|s|secs?|mins?|h|hrs?|d|days?|weeks?|bytes?|[kKMGT]i?B|[kKMGT]?bps|[kKMGT]?Hz|x|px|rem|em|k|M|B)\b`)
+	rePort     = regexp.MustCompile(`(?i)\bport\s+\d{2,5}\b|\b[a-z][a-z0-9.-]*:\d{2,5}\b`) // "port 80" and "host:8080"; a time such as 09:20 is not a port
 	reHost     = regexp.MustCompile(`(?i)\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,24}\b`)
 	reIdent    = regexp.MustCompile(`\b[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]+\b|\b[a-z]+[A-Z][A-Za-z0-9]*\b`)
-	reBacktick = regexp.MustCompile("`([^`\n]{2,80})`")
-	reQuoted   = regexp.MustCompile(`(?:^|[\s(\[{:,=])"([^"\s][^"\n]{1,78}[^"\s])"`) // an opening quote follows a space or bracket; a closing quote follows text
+	reBacktick = regexp.MustCompile("`([^`\n]{1,300})`")
+	reQuoted   = regexp.MustCompile(`(?:^|[\s(\[{:,=*])"([^"\s](?:[^"\n]{0,298}[^"\s])?)"`)                      // an opening quote follows a space, bracket or *; a closing quote follows text
+	reSingle   = regexp.MustCompile(`(?:^|[\s(\[{:,=*])'([^'\s](?:[^'\n]{0,198}[^'\s])?)'(?:$|[\s)\]},;:.!?*])`) // 'draft' in SQL or prose; an apostrophe inside a word is not a quote
 	reDate     = regexp.MustCompile(`\b\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2})?)?\b`)
 	reNumber   = regexp.MustCompile(`\b\d+(?:[.,]\d+)*\b`) // every number, counts included ("10 notes", "3 attempts")
 	reListMark = regexp.MustCompile(`(?m)^\s*\d+[.)]\s`)   // "1. " at the start of a line numbers a list; it is not a value
@@ -57,8 +58,10 @@ func flat(s string) string { return strings.TrimSpace(spaces.ReplaceAllString(s,
 // has reports whether v occurs in text as a whole value: not inside a longer number, name, address or path. "port 80"
 // is not found in "port 8080", and an address is not found inside a longer address that starts with it. Both sides are compared with white space
 // collapsed, so a value that was rewrapped over a line break is still found.
-func has(text, v string) bool {
-	text, v = flat(text), flat(v)
+func has(text, v string) bool { return hasFlat(flat(text), flat(v)) }
+
+// hasFlat is has for text and value whose white space is already collapsed.
+func hasFlat(text, v string) bool {
 	if v == "" {
 		return true
 	}
@@ -115,6 +118,9 @@ type value struct {
 	Tick bool
 }
 
+// quoteFix turns typographic quotes into plain ones, so a rewrite that changes the quote style keeps its values.
+var quoteFix = strings.NewReplacer("\u201c", `"`, "\u201d", `"`, "\u201e", `"`, "\u2018", "'", "\u2019", "'")
+
 func extract(text string) []value {
 	seen := map[string]bool{}
 	var out []value
@@ -126,6 +132,7 @@ func extract(text string) []value {
 		seen[v] = true
 		out = append(out, value{v, tick})
 	}
+	text = quoteFix.Replace(text)
 	text = strings.ReplaceAll(text, "[[", " ")
 	text = reListMark.ReplaceAllString(text, "")
 	orig := text
@@ -133,9 +140,9 @@ func extract(text string) []value {
 		add(m, false)
 	}
 	text = reURL.ReplaceAllString(text, " ") // the parts of a URL are not values of their own
-	// longest structure first; each match is blanked, so a value is taken once, whole ("2026-11-03" is a date, not
-	// also 2026, 11 and 03; "~/.hermes/logs/x.json" is a path, not also a host "x.json")
-	for _, re := range []*regexp.Regexp{reDate, reIP, rePort, rePath, reUnit, reVersion, reHost, reIdent} {
+	// longest structure first; each match is blanked, so a value is taken once, whole ("~/a/2026-11-03.json" is a
+	// path, not also a date and a host)
+	for _, re := range []*regexp.Regexp{rePath, reDate, reIP, rePort, reUnit, reVersion, reHost, reIdent} {
 		text = re.ReplaceAllStringFunc(text, func(m string) string {
 			add(m, false)
 			return strings.Repeat(" ", len(m))
@@ -143,6 +150,22 @@ func extract(text string) []value {
 	}
 	for _, m := range reNumber.FindAllString(text, -1) {
 		add(m, false)
+	}
+	// what is left, word by word: anything that holds a digit, an @, a backslash, a colon or an underscore, an option
+	// like -x or --force, or a name in capitals, is a value as a whole token ("p95", "gemma4:12b", "D:\\", "-1")
+	for _, f := range strings.Fields(reURL.ReplaceAllString(orig, " ")) { // whole tokens of the text as written, so "explicit_only=True" and "48px–96px" are values too
+		t := strings.Trim(f, "()[]{}<>\"'`.,;!?*|:")
+		if t == "" || !strings.ContainsFunc(t, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }) {
+			continue
+		}
+		switch {
+		case strings.ContainsAny(t, "0123456789@\\:_"):
+			add(t, false)
+		case t[0] == '-' && len(t) > 1:
+			add(t, false)
+		case len(t) >= 5 && strings.Trim(t, "ABCDEFGHIJKLMNOPQRSTUVWXYZ") == "":
+			add(t, false)
+		}
 	}
 	for _, m := range reHex.FindAllString(orig, -1) {
 		if strings.ContainsAny(m, "0123456789") && strings.ContainsAny(m, "abcdef") {
@@ -154,6 +177,9 @@ func extract(text string) []value {
 	}
 	for _, m := range reQuoted.FindAllStringSubmatch(orig, -1) {
 		add(`"`+m[1]+`"`, false) // the quotes are part of the value: "noindex" is not "noindex, nofollow"
+	}
+	for _, m := range reSingle.FindAllStringSubmatch(orig, -1) {
+		add("'"+m[1]+"'", false)
 	}
 	return out
 }
@@ -176,7 +202,10 @@ type holder struct {
 }
 
 func newHolder(text string) holder {
-	h := holder{flatText: flat(text), set: map[string]bool{}}
+	text = quoteFix.Replace(text)
+	// list markers are layout: "2." at the start of a line is dropped before the lines are joined, or it would
+	// become a value of the new text and hide a changed "2"
+	h := holder{flatText: flat(reListMark.ReplaceAllString(text, "")), set: map[string]bool{}}
 	// read as written, and with white space collapsed: a value rewrapped over a line break is still one value
 	for _, src := range []string{text, h.flatText} {
 		for _, v := range extract(src) {
@@ -190,7 +219,7 @@ func (h holder) has(v value) bool {
 	if h.set[v.V] {
 		return true
 	}
-	return v.Tick && has(h.flatText, v.V)
+	return v.Tick && hasFlat(h.flatText, v.V)
 }
 
 // Note is one source note of a merge.
@@ -212,6 +241,11 @@ func CheckAppend(notes []Note, section string) (ok bool, problems []string) {
 		}
 	}
 	sn := norm(section)
+	secWords := strings.Split(sn, " ")
+	windows := make(map[string]bool, len(secWords))
+	for i := 0; i+Window <= len(secWords); i++ {
+		windows[strings.Join(secWords[i:i+Window], " ")] = true
+	}
 	units := blocks(section)
 	for _, n := range notes {
 		words := strings.Split(norm(n.Text), " ")
@@ -220,7 +254,7 @@ func CheckAppend(notes []Note, section string) (ok bool, problems []string) {
 			found = strings.Contains(sn, norm(n.Text))
 		}
 		for s := 0; !found && s+Window <= len(words); s++ {
-			found = strings.Contains(sn, strings.Join(words[s:s+Window], " "))
+			found = windows[strings.Join(words[s:s+Window], " ")]
 		}
 		if !found {
 			problems = append(problems, fmt.Sprintf("note %s does not survive in the section (no verbatim run of %d words, or not whole when shorter)", short(n.ID), Window))
@@ -235,11 +269,8 @@ func CheckAppend(notes []Note, section string) (ok bool, problems []string) {
 			problems = append(problems, fmt.Sprintf("no list item or paragraph cites note %s", short(n.ID)))
 			continue
 		}
-		ch := newHolder(strings.Join(cited, "\n"))
-		for _, v := range extract(n.Text) {
-			if !ch.has(v) {
-				problems = append(problems, fmt.Sprintf("note %s: value %q is missing from the item that cites it", short(n.ID), v.V))
-			}
+		for _, v := range missing(n.Text, strings.Join(cited, "\n")) {
+			problems = append(problems, fmt.Sprintf("note %s: value %q is missing from the item that cites it", short(n.ID), v))
 		}
 	}
 	return len(problems) == 0, problems
@@ -265,11 +296,8 @@ func CheckReplace(original, replacement string) (ok bool, problems []string) {
 	if fo != fn || fn%2 != 0 {
 		problems = append(problems, fmt.Sprintf("fence count %d->%d (changed or odd)", fo, fn))
 	}
-	rh := newHolder(replacement)
-	for _, v := range extract(original) {
-		if !rh.has(v) {
-			problems = append(problems, fmt.Sprintf("value %q is missing from the new text", v.V))
-		}
+	for _, v := range missing(original, replacement) {
+		problems = append(problems, fmt.Sprintf("value %q is missing from the new text", v))
 	}
 	return len(problems) == 0, problems
 }
@@ -292,8 +320,8 @@ func blocks(section string) []string {
 			flush()
 			continue
 		}
-		if bulletStart.MatchString(l) {
-			flush()
+		if bulletStart.MatchString(l) && !(len(cur) > 0 && indentOf(l) > indentOf(cur[0])) {
+			flush() // a more indented bullet is part of the item above it
 		}
 		cur = append(cur, l)
 	}
@@ -309,4 +337,46 @@ func short(id string) string {
 		return id[:8]
 	}
 	return id
+}
+
+// splitFences separates the text outside code fences from the text inside them.
+func splitFences(text string) (prose, code string) {
+	var p, c []string
+	in := false
+	for _, l := range strings.Split(text, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(l), "```") {
+			in = !in
+			continue
+		}
+		if in {
+			c = append(c, l)
+		} else {
+			p = append(p, l)
+		}
+	}
+	return strings.Join(p, "\n"), strings.Join(c, "\n")
+}
+
+// missing lists the values of old that new does not hold. A value written in prose must be in the prose of new (a
+// copy of it inside a code fence does not stand for it); a value written in a code fence may be anywhere in new.
+func missing(old, new string) []string {
+	op, oc := splitFences(old)
+	np, _ := splitFences(new)
+	whole, prose := newHolder(new), newHolder(np)
+	var out []string
+	for _, v := range extract(op) {
+		if !prose.has(v) {
+			out = append(out, v.V)
+		}
+	}
+	for _, v := range extract(oc) {
+		if !whole.has(v) {
+			out = append(out, v.V)
+		}
+	}
+	return out
+}
+
+func indentOf(l string) int {
+	return len(l) - len(strings.TrimLeft(l, " \t"))
 }

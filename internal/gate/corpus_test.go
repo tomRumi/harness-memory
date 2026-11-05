@@ -3,9 +3,11 @@ package gate
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 )
 
 // rewrap joins the lines of plain paragraphs (outside code fences) into one line and leaves everything else alone.
@@ -160,4 +162,60 @@ func TestCorpusSingleCharacterChangesAreRefused(t *testing.T) {
 		return nil
 	})
 	t.Logf("single-character changes tried %d, accepted by the gate %d; by kind (tried, accepted): %v", tried, missed, byKind)
+}
+
+var listNumberRe = regexp.MustCompile(`^\(?\d+[.)]$`)
+
+// With HMS_GATE_CORPUS set, this changes whole white-space tokens chosen WITHOUT using the extractor: every token
+// that holds a digit, @, backslash, colon, underscore, a leading dash, or five or more capitals. It finds kinds of
+// value the extractor does not know. A token that is only a list number is skipped (renumbering is layout).
+func TestCorpusTokenChangesAreRefused(t *testing.T) {
+	dir := os.Getenv("HMS_GATE_CORPUS")
+	if dir == "" {
+		t.Skip("HMS_GATE_CORPUS not set")
+	}
+	tried, missed := 0, 0
+	filepath.Walk(dir, func(p string, fi os.FileInfo, err error) error {
+		if err != nil || fi.IsDir() || !strings.HasSuffix(p, ".md") {
+			return nil
+		}
+		b, _ := os.ReadFile(p)
+		txt := string(b)
+		prose, _ := splitFences(txt)
+		seen := map[string]bool{}
+		var toks []string
+		for _, f := range strings.Fields(prose) {
+			c := strings.Trim(f, "()[]{}<>\"'`.,;!?*|:")
+			if c == "" || seen[c] || listNumberRe.MatchString(f) || !strings.ContainsFunc(c, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }) {
+				continue
+			}
+			if strings.ContainsAny(c, "0123456789@\\_") || strings.Contains(c, ":") || (c[0] == '-' && len(c) > 1) || (len(c) >= 5 && strings.Trim(c, "ABCDEFGHIJKLMNOPQRSTUVWXYZ") == "") {
+				seen[c] = true
+				toks = append(toks, c)
+			}
+		}
+		step := 1
+		if len(toks) > 40 {
+			step = len(toks) / 40
+		}
+		for i := 0; i < len(toks); i += step {
+			v := toks[i]
+			mut := strings.ReplaceAll(txt, v, mutate(v))
+			if mut == txt || strings.Contains(flat(mut), v) {
+				continue // nothing changed, or the token still occurs somewhere (inside a longer token or wrapped)
+			}
+			tried++
+			if ok, _ := CheckReplace(txt, mut); ok {
+				missed++
+				t.Logf("accepted, to be read by a person: %s: token %q -> %q", filepath.Base(p), v, mutate(v))
+			}
+		}
+		return nil
+	})
+	t.Logf("token changes tried %d, accepted by the gate %d", tried, missed)
+	// A change that leaves the same value elsewhere in the file is not a loss (an equivalent change), so a few
+	// acceptances are expected; more than one in a thousand means a kind of value is not recognised.
+	if missed*1000 > tried {
+		t.Fatalf("%d of %d token changes accepted", missed, tried)
+	}
 }
