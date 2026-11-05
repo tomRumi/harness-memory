@@ -16,7 +16,7 @@ import (
 	"github.com/tomRumi/harness-memory-service/internal/store"
 )
 
-// Quotas per layer for an unrestricted recall, and the cap on one hit's text (ported: server.py:44, :371).
+// Quotas per layer for an unrestricted recall, and the cap on one hit's text.
 const (
 	QuotaWiki   = 2
 	QuotaMemory = 1

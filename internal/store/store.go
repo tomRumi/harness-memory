@@ -76,7 +76,7 @@ func (s *Store) Event(kind, node, project, detail string) {
 }
 
 // DetID derives a stable id from the text, laid out like a UUID: sha1 over the parts joined by NUL
-// (the predecessor's scheme, server.py:306-308), so the same note always has the same id.
+// so the same note always has the same id.
 func DetID(prefix string, parts ...string) string {
 	h := sha1.Sum([]byte(strings.Join(append([]string{prefix}, parts...), "\x00")))
 	x := fmt.Sprintf("%x", h)

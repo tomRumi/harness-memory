@@ -437,3 +437,20 @@ func TestWikiReadRelatedLineThroughTheServer(t *testing.T) {
 		t.Fatalf("wiki_read:\n%s", got)
 	}
 }
+
+func TestFreshNotesAreFoundNextToTheWikiHits(t *testing.T) {
+	_, srv, _, _, _ := setup(t)
+	ctx := context.Background()
+	for _, txt := range []string{
+		"The daemon port was moved to 9100 last week after the clash with the metrics agent on this machine.",
+		"The daemon port 9100 is also what the health page of the metrics agent reports now for the daemon.",
+	} {
+		if _, err := srv.St.Learn(ctx, txt, "proj", "ops:port", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out := srv.Recall(ctx, RecallIn{Query: "daemon port", Project: "proj"})
+	if wiki, notes := strings.Count(out, "[wiki "), strings.Count(out, "[memory notes/"); wiki < 1 || notes != 2 {
+		t.Fatalf("default recall must hold the wiki hit and both fresh notes (wiki %d, notes %d):\n%s", wiki, notes, out)
+	}
+}
