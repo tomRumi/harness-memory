@@ -146,11 +146,11 @@ func (tx *Tx) Write(rel string, data []byte) error {
 // Delete removes the note or fact node id (for example notes/p/<uuid>) and updates the index. A non-empty event
 // kind is recorded in the event history with the detail.
 func (tx *Tx) Delete(id, project, event, detail string) error {
-	if err := tx.remember(id + ".md"); err != nil {
+	rel := id + ".md"
+	if err := tx.remember(rel); err != nil {
 		return err
 	}
-	rel, err := tx.s.removeNode(id)
-	if err != nil {
+	if err := os.Remove(filepath.Join(tx.s.Repo, filepath.FromSlash(rel))); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	if event != "" {

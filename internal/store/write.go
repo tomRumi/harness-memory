@@ -197,12 +197,3 @@ func (s *Store) Retire(ctx context.Context, prefix, reason, proj string) (string
 	}
 	return out, nil
 }
-
-// removeNode deletes the file of a note or fact; the index and the committer are not told. The caller holds the lock.
-func (s *Store) removeNode(id string) (rel string, err error) {
-	rel = id + ".md"
-	if err := os.Remove(filepath.Join(s.Repo, filepath.FromSlash(rel))); err != nil && !os.IsNotExist(err) {
-		return "", err
-	}
-	return rel, nil
-}
