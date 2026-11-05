@@ -15,6 +15,7 @@ type Tx struct {
 	s       *Store
 	changed []string
 	seen    map[string]bool
+	checked map[string]bool // project folders already checked by guard
 	undo    []undoEntry
 	undone  map[string]bool
 	events  []txEvent // recorded in events.db only when the operation succeeds
@@ -42,7 +43,7 @@ func (s *Store) Do(fn func(tx *Tx) error) (err error) {
 		return err
 	}
 	defer unlock()
-	tx := &Tx{s: s, seen: map[string]bool{}, undone: map[string]bool{}}
+	tx := &Tx{s: s, seen: map[string]bool{}, checked: map[string]bool{}, undone: map[string]bool{}}
 	defer func() {
 		r := recover()
 		if r == nil && err == nil {
@@ -130,6 +131,9 @@ func (tx *Tx) note(rel string) {
 
 // Write writes rel (a path under the repository) atomically and updates its index entry.
 func (tx *Tx) Write(rel string, data []byte) error {
+	if err := tx.guard(rel); err != nil {
+		return err
+	}
 	if tx.Ignored(rel) {
 		return fmt.Errorf("%s: %w", rel, ErrIgnored)
 	}
@@ -147,6 +151,9 @@ func (tx *Tx) Write(rel string, data []byte) error {
 // kind is recorded in the event history with the detail.
 func (tx *Tx) Delete(id, project, event, detail string) error {
 	rel := id + ".md"
+	if err := tx.guard(rel); err != nil {
+		return err
+	}
 	if err := tx.remember(rel); err != nil {
 		return err
 	}

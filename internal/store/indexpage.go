@@ -31,6 +31,9 @@ func (s *Store) indexPageLocked(proj string) (rel, content string, wrote bool, e
 	if canon, err := wiki.Project(proj); err != nil || canon != proj { // never a second folder for a name that has capitals
 		return "", "", false, fmt.Errorf("invalid project name %q", proj)
 	}
+	if err := checkFolder(s.Repo, "wiki", proj); err != nil {
+		return "", "", false, err
+	}
 	content, err = s.DB.BuildIndexPage(proj)
 	if err != nil {
 		return "", "", false, err
