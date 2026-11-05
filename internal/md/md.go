@@ -13,14 +13,32 @@ type Doc struct {
 	FM    map[string]any
 	Body  string
 	Error string // set when a frontmatter block exists but cannot be parsed; the file is then read as plain body
+	Head  string // the frontmatter block as parsed, line ends normalised: Head+Body is the whole text; "" without one
+	End   int    // where Body starts in the bytes given to Parse (line ends as they were)
 }
+
+// NormalizeNL turns CRLF line ends into LF. It is the one place that does so.
+func NormalizeNL(s string) string { return strings.ReplaceAll(s, "\r\n", "\n") }
 
 // Parse splits src. A frontmatter block is a leading "---" line, YAML, and a closing "---" line.
 // A malformed block never fails the read: the whole file becomes the body and Error says why.
 func Parse(src []byte) Doc {
-	s := string(bytes.ReplaceAll(src, []byte("\r\n"), []byte("\n")))
+	d := parse(NormalizeNL(string(src)))
+	d.Head = d.Head[:len(d.Head)-len(d.Body)]
+	d.End = len(src)
+	for n := 0; d.End > 0 && n < len(d.Body); { // the body is the same text at the end of src, with its CRs
+		d.End--
+		if src[d.End] != '\r' || d.End+1 >= len(src) || src[d.End+1] != '\n' {
+			n++
+		}
+	}
+	return d
+}
+
+// parse works on text whose line ends are LF; Head holds the whole text until Parse cuts it.
+func parse(s string) Doc {
 	if !strings.HasPrefix(s, "---\n") {
-		return Doc{Body: s}
+		return Doc{Body: s, Head: s}
 	}
 	rest := s[4:]
 	end := strings.Index(rest, "\n---\n")
@@ -29,17 +47,17 @@ func Parse(src []byte) Doc {
 		end, trailing = len(rest)-4, true
 	}
 	if end < 0 {
-		return Doc{Body: s, Error: "frontmatter block is not closed"}
+		return Doc{Body: s, Head: s, Error: "frontmatter block is not closed"}
 	}
 	fm := map[string]any{}
 	if err := yaml.Unmarshal([]byte(rest[:end]), &fm); err != nil {
-		return Doc{Body: s, Error: "frontmatter: " + firstLine(err.Error())}
+		return Doc{Body: s, Head: s, Error: "frontmatter: " + firstLine(err.Error())}
 	}
 	body := ""
 	if !trailing {
 		body = rest[end+5:]
 	}
-	return Doc{FM: fm, Body: strings.TrimPrefix(body, "\n")}
+	return Doc{FM: fm, Body: strings.TrimPrefix(body, "\n"), Head: s}
 }
 
 func firstLine(s string) string {
@@ -206,7 +224,7 @@ func stripInlineCode(l string) string {
 func WikiLinks(text string) []string {
 	var keep []string
 	var f Fence
-	for _, l := range strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n") {
+	for _, l := range strings.Split(NormalizeNL(text), "\n") {
 		if f.Line(l) {
 			continue
 		}

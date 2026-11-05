@@ -20,7 +20,7 @@ type Piece struct {
 // heading is its own piece. A section over WikiCap is cut at the last blank line before the cap, or at
 // the cap itself when there is none. Whitespace-only pieces are dropped.
 func Wiki(body string) []Piece {
-	body = strings.ReplaceAll(body, "\r\n", "\n")
+	body = md.NormalizeNL(body)
 	var parts []Piece
 	cur := Piece{}
 	var sb strings.Builder

@@ -57,30 +57,16 @@ func SetKeys(src []byte, set map[string]any) ([]byte, error) {
 	if !strings.HasPrefix(text, "---"+nl) && !strings.HasPrefix(text, "---\n") {
 		return []byte("---" + nl + strings.Join(lines(), nl) + nl + "---" + nl + text), nil
 	}
-	if d := Parse(src); d.Error != "" {
+	d := Parse(src)
+	if d.Error != "" {
 		return nil, fmt.Errorf("frontmatter does not parse (%s): not rewritten", d.Error)
 	}
-	rest := text[strings.Index(text, "\n")+1:]
-	headEnd := len(text) - len(rest)
-	// find the closing delimiter line
-	pos, closeAt := 0, -1
-	for pos < len(rest) {
-		end := strings.Index(rest[pos:], "\n")
-		var line string
-		if end < 0 {
-			line, end = rest[pos:], len(rest)-pos
-		} else {
-			line = rest[pos : pos+end]
-		}
-		if strings.TrimRight(line, "\r") == "---" {
-			closeAt = pos
-			break
-		}
-		pos += end + 1
-	}
-	if closeAt < 0 {
-		return nil, fmt.Errorf("frontmatter is not closed: not rewritten")
-	}
+	// the block is the lines between the opening delimiter and the closing one, the last line of the parsed head
+	head := text[:d.End]
+	closeAt := strings.LastIndex(strings.TrimRight(head, "\r\n"), "\n") + 1
+	headEnd := strings.Index(text, "\n") + 1
+	rest := text[headEnd:]
+	closeAt -= headEnd
 	block := rest[:closeAt]
 	bl := strings.Split(strings.TrimSuffix(block, "\n"), "\n")
 	if block == "" {

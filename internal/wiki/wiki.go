@@ -158,7 +158,7 @@ func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 func FirstSentence(body string) string {
 	var parts []string
 	var fence md.Fence
-	for _, ln := range strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n") {
+	for _, ln := range strings.Split(md.NormalizeNL(body), "\n") {
 		t := strings.TrimSpace(ln)
 		skip := fence.Line(ln) || strings.HasPrefix(t, "#") || strings.Trim(t, "-*_ ") == "" && t != ""
 		if t == "" || skip {

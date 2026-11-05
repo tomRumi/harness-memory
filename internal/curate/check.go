@@ -65,7 +65,7 @@ func numbers(text string) []string {
 // nonBlank returns the lines of s that are not blank, with white space collapsed and the ends trimmed.
 func nonBlank(s string) []string {
 	var out []string
-	for _, l := range strings.Split(strings.ReplaceAll(s, "\r\n", "\n"), "\n") {
+	for _, l := range strings.Split(md.NormalizeNL(s), "\n") {
 		if l = flat(l); l != "" {
 			out = append(out, l)
 		}
@@ -79,7 +79,7 @@ func sections(body string) []string {
 	var out []string
 	var cur []string
 	var f md.Fence
-	for _, l := range strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n") {
+	for _, l := range strings.Split(md.NormalizeNL(body), "\n") {
 		if !f.Line(l) && reHeading.MatchString(strings.TrimSpace(l)) && len(cur) > 0 {
 			out = append(out, strings.Join(cur, "\n"))
 			cur = nil
@@ -204,7 +204,7 @@ func CheckPage(oldBody, newBody string, notes []Note, resolve func(link string) 
 // endsInFence reports whether a fenced code block is still open at the end of body.
 func endsInFence(body string) bool {
 	var f md.Fence
-	for _, l := range strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n") {
+	for _, l := range strings.Split(md.NormalizeNL(body), "\n") {
 		f.Line(l)
 	}
 	return f.Open()

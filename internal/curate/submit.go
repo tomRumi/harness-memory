@@ -404,9 +404,8 @@ func composePage(j *pageJob, date string) ([]byte, error) {
 		}
 		return md.Render(fm, body), nil
 	}
-	text := strings.ReplaceAll(string(j.old), "\r\n", "\n")
-	d := md.Parse([]byte(text))
-	head := text[:len(text)-len(d.Body)]
+	d := md.Parse(j.old)
+	head := d.Head
 	set := map[string]any{}
 	if summary != "" {
 		set["summary"] = summary
