@@ -528,7 +528,9 @@ func TestCommitterRetriesAfterAFailure(t *testing.T) {
 	if _, err := st.Learn(context.Background(), "A note saved while the owner has a file staged in the repository.", "r", "k", ""); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(150 * time.Millisecond)
+	for end := time.Now().Add(10 * time.Second); st.Commit.LastErr() == nil && time.Now().Before(end); { // the first attempt may be late on a loaded machine
+		time.Sleep(10 * time.Millisecond)
+	}
 	if st.Commit.LastErr() == nil || st.Commit.Commits() != 0 {
 		t.Fatalf("expected a refusal first: %d %v", st.Commit.Commits(), st.Commit.LastErr())
 	}
