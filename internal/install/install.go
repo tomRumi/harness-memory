@@ -148,7 +148,7 @@ func prepare(p Paths, out io.Writer) (commitErr, err error) {
 			}
 			if err != nil {
 				store.Git(p.Repo, "reset", "-q", "--", ".gitignore")
-				commitErr = fmt.Errorf("committed: NO (the first commit failed: %v: %s); the files are saved, run hms doctor", err, firstLine(errors.New(o)))
+				commitErr = fmt.Errorf("committed: NO (the first commit failed: %v: %s); the files are saved. Fix the cause (signing, a hook, an ignore rule, a lock; see git status in %s) and run the command again", err, firstLine(errors.New(o)), p.Repo)
 			}
 		}
 	}

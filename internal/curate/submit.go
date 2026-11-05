@@ -130,7 +130,7 @@ func Submit(ctx context.Context, st *store.Store, sub Submission) (Report, error
 	if st.Commit != nil {
 		st.Commit.Flush()
 		if err := st.Commit.LastErr(); err != nil {
-			rep.Warnings = append(rep.Warnings, CommitFailed(err))
+			rep.Warnings = append(rep.Warnings, CommitFailed(err, st.Repo))
 		}
 	}
 	var mat *index.Matrix // vectors of the existing pages, loaded for the first new page
@@ -294,9 +294,10 @@ func pathTaken(repo, rel string) bool {
 	return err == nil
 }
 
-// CommitFailed is the sentence every command prints when the files are saved but the commit failed.
-func CommitFailed(err error) string {
-	return fmt.Sprintf("committed: NO (%s); the files are saved, run hms doctor", firstLine(err.Error()))
+// CommitFailed is the sentence every command prints when the files are saved but the commit failed. Doctor cannot see
+// signing or hook failures, so it does not send the owner there.
+func CommitFailed(err error, repo string) string {
+	return fmt.Sprintf("committed: NO (%s); the files are saved. Fix the cause (signing, a hook, an ignore rule, a lock; see git status in %s) and run the command again", firstLine(err.Error()), repo)
 }
 
 func firstLine(s string) string { return strings.TrimSpace(strings.SplitN(s, "\n", 2)[0]) }

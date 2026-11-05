@@ -174,7 +174,7 @@ func sweepLeftovers(st *store.Store, stderr io.Writer) {
 func closeStore(st *store.Store, stderr io.Writer, code *int) {
 	st.Close()
 	if err := st.Commit.LastErr(); err != nil {
-		fmt.Fprintln(stderr, "hms:", curate.CommitFailed(err))
+		fmt.Fprintln(stderr, "hms:", curate.CommitFailed(err, st.Repo))
 		*code = 1
 	}
 }

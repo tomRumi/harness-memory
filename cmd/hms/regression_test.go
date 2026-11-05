@@ -269,7 +269,7 @@ func TestFailedCommitIsReportedByEveryWritingCommand(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "answer.json")
 	os.WriteFile(file, []byte(submission(ids)), 0o644)
 	out, errOut, c := hms(t, home, deadURL(), noModel, "", "curate", "-submit", file)
-	if c != 1 || !strings.Contains(errOut, "committed: NO") || !strings.Contains(errOut, "hms doctor") || !strings.Contains(out, "committed: NO") {
+	if c != 1 || !strings.Contains(errOut, "committed: NO") || !strings.Contains(errOut, "run the command again") || !strings.Contains(out, "committed: NO") {
 		t.Fatalf("submit: exit %d\nstdout: %s\nstderr: %s", c, out, errOut)
 	}
 	if s := strings.TrimSpace(gitIn(t, repo, "diff", "--cached", "--name-only")); s != "" {
