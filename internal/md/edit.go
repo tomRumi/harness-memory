@@ -100,8 +100,16 @@ func SetKeys(src []byte, set map[string]any) ([]byte, error) {
 			}
 			bl[i] = k + ": " + scalar(set[k]) + cr // a quoted key becomes a plain one: the same key, once
 			done[k] = true
-			for j := i + 1; j < len(bl) && (strings.HasPrefix(bl[j], " ") || strings.HasPrefix(bl[j], "\t")); j++ {
-				drop[j] = true // a block or folded value goes on over indented lines; they belong to the old value
+			// a block or folded value goes on over indented lines; they belong to the old value. When the key has no
+			// value on its own line it is a block list, whose "- " lines may also start at column 0.
+			blockList := emptyValue(l)
+			for j := i + 1; j < len(bl); j++ {
+				c := strings.TrimRight(bl[j], "\r")
+				if strings.HasPrefix(c, " ") || strings.HasPrefix(c, "\t") || blockList && (c == "-" || strings.HasPrefix(c, "- ")) {
+					drop[j] = true
+					continue
+				}
+				break
 			}
 		}
 	}
@@ -130,4 +138,11 @@ func SetKeys(src []byte, set map[string]any) ([]byte, error) {
 	}
 	b.WriteString(rest[closeAt:])
 	return []byte(b.String()), nil
+}
+
+// emptyValue reports whether the key line l has no value after the colon (nothing, or only a comment).
+func emptyValue(l string) bool {
+	_, rest, _ := strings.Cut(l, ":")
+	rest = strings.TrimSpace(rest)
+	return rest == "" || strings.HasPrefix(rest, "#")
 }

@@ -9,6 +9,8 @@ import (
 	"time"
 	"unicode"
 
+	"golang.org/x/text/unicode/norm"
+
 	"github.com/tomRumi/harness-memory-service/internal/md"
 )
 
@@ -18,6 +20,13 @@ const IndexTitle = "Index"
 
 // MaxTitle is the longest title, in characters.
 const MaxTitle = 100
+
+// MaxTitleBytes is the longest title, in bytes of UTF-8 (file names are limited in bytes, not characters).
+const MaxTitleBytes = 200
+
+// Fold is the form in which titles and link targets are compared: Unicode NFC, lower case. A file system may store
+// "Café" as one character or as two (macOS does), and both are the same page.
+func Fold(s string) string { return strings.ToLower(norm.NFC.String(s)) }
 
 // badChars cannot be in a title: they break links ([[A|B]], [[A#B]], [[A^B]]), paths, or are rejected as file
 // names by Obsidian or by common file systems.
@@ -31,6 +40,8 @@ func ValidTitle(title string) error {
 		return fmt.Errorf("a page title cannot be empty")
 	case len([]rune(title)) > MaxTitle:
 		return fmt.Errorf("page title %q is longer than %d characters", truncate(title), MaxTitle)
+	case len(title) > MaxTitleBytes:
+		return fmt.Errorf("page title %q is longer than %d bytes", truncate(title), MaxTitleBytes)
 	case title != strings.TrimSpace(title):
 		return fmt.Errorf("page title %q has a space at the start or the end", title)
 	case strings.HasPrefix(title, "."):
@@ -99,6 +110,14 @@ func list(d md.Doc, key string) []string {
 				s = v.Format(time.RFC3339)
 			}
 		case nil:
+		case map[string]any: // "- 2026-10-01: abc" is a one-entry map to YAML; show it as the text it was
+			s = mapText(v)
+		case map[any]any:
+			m := map[string]any{}
+			for k, val := range v {
+				m[scalarText(k)] = val
+			}
+			s = mapText(m)
 		default:
 			s = fmt.Sprint(v)
 		}
@@ -107,6 +126,27 @@ func list(d md.Doc, key string) []string {
 		}
 	}
 	return out
+}
+
+func scalarText(x any) string {
+	if t, ok := x.(time.Time); ok {
+		return t.Format("2006-01-02")
+	}
+	return fmt.Sprint(x)
+}
+
+// mapText writes a map as "key: value" (entries sorted by key, joined by ", ").
+func mapText(m map[string]any) string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, len(keys))
+	for i, k := range keys {
+		parts[i] = k + ": " + scalarText(m[k])
+	}
+	return strings.Join(parts, ", ")
 }
 
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }

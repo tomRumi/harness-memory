@@ -4,7 +4,10 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode"
 	"unicode/utf8"
+
+	"golang.org/x/text/unicode/norm"
 
 	"github.com/tomRumi/harness-memory-service/internal/md"
 )
@@ -28,12 +31,15 @@ var (
 
 func flat(s string) string { return strings.TrimSpace(spaces.ReplaceAllString(s, " ")) }
 
-// norm lowercases and drops punctuation and list markers, so a list written as a paragraph keeps its word runs.
-func norm(s string) string {
-	s = strings.ToLower(reListMark.ReplaceAllString(s, ""))
+// norm folds a text for comparison: Unicode NFC, lower case, and only letters, digits, marks and underscore are kept.
+// Everything else (punctuation, list markers, curly quotes and straight quotes, en and em dashes and hyphens) is a
+// separator, so a note with an apostrophe or a dash is found in a page that spells it the other way. A text with no
+// letter or digit gives "".
+func normText(s string) string {
+	s = strings.ToLower(norm.NFC.String(reListMark.ReplaceAllString(s, "")))
 	var b strings.Builder
 	for _, r := range s {
-		if r == '_' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r > 127 {
+		if r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r) || unicode.IsMark(r) {
 			b.WriteRune(r)
 		} else {
 			b.WriteByte(' ')
@@ -72,12 +78,9 @@ func nonBlank(s string) []string {
 func sections(body string) []string {
 	var out []string
 	var cur []string
-	fence := false
+	var f md.Fence
 	for _, l := range strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n") {
-		t := strings.TrimSpace(l)
-		if strings.HasPrefix(t, "```") {
-			fence = !fence
-		} else if !fence && reHeading.MatchString(t) && len(cur) > 0 {
+		if !f.Line(l) && reHeading.MatchString(strings.TrimSpace(l)) && len(cur) > 0 {
 			out = append(out, strings.Join(cur, "\n"))
 			cur = nil
 		}
@@ -95,7 +98,7 @@ func sections(body string) []string {
 //	each note     an 8-word run of the note (a note under 8 words: the whole note) is in the new body
 //	numbers       every number of a note is in the section of the new body where its run was found
 //	links         every [[link]] resolves
-//	fences        the number of ``` lines is even
+//	fences        the merge adds an even number of ``` or ~~~ lines
 //	length        not shorter than the old body, not longer than old + 3 x the notes + 2,000 characters
 func CheckPage(oldBody, newBody string, notes []Note, resolve func(link string) bool) []string {
 	var probs []string
@@ -119,7 +122,7 @@ func CheckPage(oldBody, newBody string, notes []Note, resolve func(link string) 
 	secNorm := make([]string, len(secs))
 	windows := map[string][]int{} // 8-word run -> sections that hold it
 	for i, s := range secs {
-		secNorm[i] = norm(s)
+		secNorm[i] = normText(s)
 		w := strings.Split(secNorm[i], " ")
 		for k := 0; k+Window <= len(w); k++ {
 			key := strings.Join(w[k:k+Window], " ")
@@ -129,12 +132,14 @@ func CheckPage(oldBody, newBody string, notes []Note, resolve func(link string) 
 		}
 	}
 	for _, n := range notes {
-		nn := norm(n.Text)
+		nn := normText(n.Text)
 		words := strings.Split(nn, " ")
 		found := map[int]bool{} // sections where a run of the note was found
-		if len(words) < Window {
+		if nn == "" {
+			// a note with no letter or digit has nothing to find: it is never in the page
+		} else if len(words) < Window {
 			for i, s := range secNorm {
-				if nn == "" || strings.Contains(" "+s+" ", " "+nn+" ") {
+				if strings.Contains(" "+s+" ", " "+nn+" ") {
 					found[i] = true
 				}
 			}
@@ -174,15 +179,10 @@ func CheckPage(oldBody, newBody string, notes []Note, resolve func(link string) 
 		}
 	}
 
-	// (v) fences
-	fences := 0
-	for _, l := range strings.Split(newBody, "\n") {
-		if strings.HasPrefix(strings.TrimSpace(l), "```") {
-			fences++
-		}
-	}
-	if fences%2 != 0 {
-		probs = append(probs, fmt.Sprintf("the page has %d ``` lines (odd)", fences))
+	// (v) fences: the merge must not leave a fence open that it opened, so what it adds is even. A page that came with
+	// an odd count (a hand edit) is old text and is kept as it is.
+	if added := countFences(newBody) - countFences(oldBody); added%2 != 0 {
+		probs = append(probs, fmt.Sprintf("the merge adds %d ``` or ~~~ lines (odd)", added))
 	}
 
 	// (vi) length, counted on the lines that matter (blank lines and spacing do not count)
@@ -198,6 +198,17 @@ func CheckPage(oldBody, newBody string, notes []Note, resolve func(link string) 
 		probs = append(probs, fmt.Sprintf("the page is too long: %d characters, at most %d for these notes", newLen, max))
 	}
 	return probs
+}
+
+// countFences counts the lines that start with ``` or ~~~.
+func countFences(body string) int {
+	n := 0
+	for _, l := range strings.Split(body, "\n") {
+		if md.IsFenceLine(l) {
+			n++
+		}
+	}
+	return n
 }
 
 func short(id string) string {

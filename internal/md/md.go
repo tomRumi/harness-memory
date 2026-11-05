@@ -111,8 +111,94 @@ func Render(fm map[string]any, body string) []byte {
 	return b.Bytes()
 }
 
+// Fence tracks fenced code blocks (``` and ~~~) line by line. A block opens with a run of three or more of one
+// marker character and closes with a run of the same character that is at least as long.
+type Fence struct {
+	ch byte
+	n  int
+}
+
+// Line feeds the next line and reports whether it belongs to a fenced block: the opening line, the lines inside and
+// the closing line.
+func (f *Fence) Line(line string) bool {
+	t := strings.TrimSpace(line)
+	if f.n == 0 {
+		if c, n := fenceRun(t); n >= 3 {
+			f.ch, f.n = c, n
+			return true
+		}
+		return false
+	}
+	if c, n := fenceRun(t); c == f.ch && n >= f.n && strings.Trim(t, string(c)) == "" {
+		f.ch, f.n = 0, 0
+	}
+	return true
+}
+
+// Open reports whether a fenced block is still open.
+func (f *Fence) Open() bool { return f.n > 0 }
+
+func fenceRun(t string) (byte, int) {
+	if t == "" || (t[0] != '`' && t[0] != '~') {
+		return 0, 0
+	}
+	n := 0
+	for n < len(t) && t[n] == t[0] {
+		n++
+	}
+	return t[0], n
+}
+
+// IsFenceLine reports whether the line is a fence marker line (starts with ``` or ~~~).
+func IsFenceLine(line string) bool {
+	t := strings.TrimSpace(line)
+	return strings.HasPrefix(t, "```") || strings.HasPrefix(t, "~~~")
+}
+
+// stripInlineCode blanks the inline code spans of one line (a run of backticks up to the next run of the same length).
+func stripInlineCode(l string) string {
+	if !strings.Contains(l, "`") {
+		return l
+	}
+	var b strings.Builder
+	for i := 0; i < len(l); {
+		if l[i] != '`' {
+			b.WriteByte(l[i])
+			i++
+			continue
+		}
+		j := i
+		for j < len(l) && l[j] == '`' {
+			j++
+		}
+		run := l[i:j]
+		if k := strings.Index(l[j:], run); k >= 0 {
+			// the closing run must not be part of a longer run
+			end := j + k + len(run)
+			if end >= len(l) || l[end] != '`' {
+				b.WriteByte(' ')
+				i = end
+				continue
+			}
+		}
+		b.WriteString(run)
+		i = j
+	}
+	return b.String()
+}
+
 // WikiLinks returns the targets of [[wikilinks]] in text, without aliases or anchors, in order of first appearance.
+// Links inside fenced code blocks and inline code spans are not links, and an embed (![[file.png]]) is not a link.
 func WikiLinks(text string) []string {
+	var keep []string
+	var f Fence
+	for _, l := range strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n") {
+		if f.Line(l) {
+			continue
+		}
+		keep = append(keep, stripInlineCode(l))
+	}
+	text = strings.Join(keep, "\n")
 	var out []string
 	seen := map[string]bool{}
 	for i := 0; i < len(text); {
@@ -120,13 +206,17 @@ func WikiLinks(text string) []string {
 		if j < 0 {
 			break
 		}
-		start := i + j + 2
+		at := i + j
+		start := at + 2
 		k := strings.Index(text[start:], "]]")
 		if k < 0 {
 			break
 		}
 		t := text[start : start+k]
 		i = start + k + 2
+		if at > 0 && text[at-1] == '!' {
+			continue
+		}
 		if p := strings.IndexAny(t, "|#"); p >= 0 {
 			t = t[:p]
 		}

@@ -41,12 +41,12 @@ func loadResolver(q queryer) (*resolver, error) {
 		if err := rows.Scan(&id, &project, &stem, &aliases); err != nil {
 			return nil, err
 		}
-		r.projects[strings.ToLower(project)] = project
-		keys := map[string]bool{strings.ToLower(stem): true}
-		keys[strings.ToLower(strings.TrimPrefix(id, "wiki/"+project+"/"))] = true // a path inside the project: [[folder/Page]]
+		r.projects[wiki.Fold(project)] = project
+		keys := map[string]bool{wiki.Fold(stem): true}
+		keys[wiki.Fold(strings.TrimPrefix(id, "wiki/"+project+"/"))] = true // a path inside the project: [[folder/Page]]
 		for _, a := range strings.Split(aliases, "\n") {
 			if a = strings.TrimSpace(a); a != "" {
-				keys[strings.ToLower(a)] = true
+				keys[wiki.Fold(a)] = true
 			}
 		}
 		for k := range keys {
@@ -82,9 +82,9 @@ func (r *resolver) resolve(src, raw string) (status, id string, matches []string
 		return linkAmbiguous, "", ids, true
 	}
 	if i := strings.Index(name, "/"); i > 0 { // [[project/Target]]
-		if proj, ok := r.projects[strings.ToLower(name[:i])]; ok {
+		if proj, ok := r.projects[wiki.Fold(name[:i])]; ok {
 			var in []target
-			for _, t := range r.byKey[strings.ToLower(name[i+1:])] {
+			for _, t := range r.byKey[wiki.Fold(name[i+1:])] {
 				if t.project == proj {
 					in = append(in, t)
 				}
@@ -94,7 +94,7 @@ func (r *resolver) resolve(src, raw string) (status, id string, matches []string
 			}
 		}
 	}
-	all := r.byKey[strings.ToLower(name)]
+	all := r.byKey[wiki.Fold(name)]
 	var same, other []target
 	for _, t := range all {
 		if t.project == src {
