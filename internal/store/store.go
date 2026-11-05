@@ -24,6 +24,8 @@ import (
 )
 
 const (
+	// MinIDPrefix is the fewest characters of an id that name a note.
+	MinIDPrefix = 4
 	// MaxNote is the longest note kept in full; longer text is cut and ends with an ellipsis.
 	MaxNote = 500
 	// GlobalProject holds what belongs to no project.
@@ -183,20 +185,6 @@ func writeFile(path string, data []byte) error {
 	return os.Rename(name, path)
 }
 
-// afterWrite updates the index for the changed files (a file that is gone leaves the index) and tells the committer.
-// Embedding of what is new follows in the background (see kickEmbed): a model server that is down or hung never fails
-// or delays a write and never keeps a saved note out of git. The error is kept (EmbedError) and recall uses keywords
-// for the note until a vector exists.
-func (s *Store) afterWrite(ctx context.Context, rels ...string) error {
-	for _, r := range rels {
-		if err := s.DB.Upsert(s.Repo, r); err != nil {
-			return err
-		}
-	}
-	s.finish(ctx, "", rels...)
-	return nil
-}
-
 // finish tells the committer about files whose index entries are already up to date (msg: the commit message, empty
 // for the default) and asks for embedding. It does no slow work, so it is safe under the write lock.
 func (s *Store) finish(ctx context.Context, msg string, rels ...string) {
@@ -291,8 +279,8 @@ func (s *Store) EmbedError() error {
 
 // Learn deposits one note and returns its id plus a short remark for the caller. It is idempotent: the same text
 // returns the same id and changes nothing.
-func (s *Store) Learn(ctx context.Context, text, proj, kind, supersedes string) (string, error) {
-	proj, err := project(proj)
+func (s *Store) Learn(ctx context.Context, text, proj, kind, supersedes string) (out string, err error) {
+	proj, err = project(proj)
 	if err != nil {
 		return "", err
 	}
@@ -310,60 +298,58 @@ func (s *Store) Learn(ctx context.Context, text, proj, kind, supersedes string) 
 	if kind == "" {
 		kind = "learning"
 	}
-	unlock, err := s.lockWrite()
+	id := DetID("mem", text)
+	rel := "notes/" + proj + "/" + id + ".md"
+	err = s.Do(func(tx *Tx) error {
+		out = id
+		if _, err := os.Stat(filepath.Join(s.Repo, rel)); err == nil {
+			s.Event("learn_dup", id, proj, "")
+			return nil
+		}
+		fm := map[string]any{"kind": kind, "created": time.Now().UTC().Format(time.RFC3339Nano), "source": "learn"}
+		if err := tx.Write(rel, md.Render(fm, text)); err != nil {
+			return err
+		}
+		note, err := s.supersede(tx, strings.TrimSpace(supersedes), proj, id)
+		if err != nil {
+			return err
+		}
+		out = id + note
+		tx.Event("learn", id, proj, kind)
+		tx.Finish(ctx, "")
+		return nil
+	})
 	if err != nil {
 		return "", err
 	}
-	defer unlock()
-	id := DetID("mem", text)
-	rel := "notes/" + proj + "/" + id + ".md"
-	if _, err := os.Stat(filepath.Join(s.Repo, rel)); err == nil {
-		s.Event("learn_dup", id, proj, "")
-		return id, nil
+	return out, nil
+}
+
+// supersede deletes the single note whose id starts with prefix (inside tx) and returns the remark for the caller.
+func (s *Store) supersede(tx *Tx, prefix, proj, newID string) (string, error) {
+	if prefix == "" {
+		return "", nil
 	}
-	fm := map[string]any{"kind": kind, "created": time.Now().UTC().Format(time.RFC3339Nano), "source": "learn"}
-	if err := writeFile(filepath.Join(s.Repo, rel), md.Render(fm, text)); err != nil {
+	if len(prefix) < MinIDPrefix {
+		return fmt.Sprintf(" || supersedes=%q is too short (give at least 4 characters of the id) — nothing was marked as replaced", prefix), nil
+	}
+	ids, err := s.DB.NodesByPrefix(prefix, proj)
+	if err != nil {
 		return "", err
 	}
-	changed := []string{rel}
-	note := ""
-	if supersedes = strings.TrimSpace(supersedes); supersedes != "" {
-		if len(supersedes) < 4 {
-			note = fmt.Sprintf(" || supersedes=%q is too short (give at least 4 characters of the id) — nothing was marked as replaced", supersedes)
-		} else {
-			ids, err := s.DB.NodesByPrefix(supersedes, proj)
-			if err != nil {
-				return id, err
-			}
-			var notes []string
-			for _, n := range ids {
-				if strings.HasPrefix(n, "notes/") && n != strings.TrimSuffix(rel, ".md") {
-					notes = append(notes, n)
-				}
-			}
-			if len(notes) != 1 {
-				note = fmt.Sprintf(" || supersedes=%q matched no single note — nothing was marked as replaced", supersedes)
-			} else {
-				trel := notes[0] + ".md"
-				if err := os.Remove(filepath.Join(s.Repo, filepath.FromSlash(trel))); err != nil && !os.IsNotExist(err) {
-					return id, err
-				}
-				changed = append(changed, trel)
-				s.Event("supersede", notes[0], proj, "->"+id)
-				note = " || replaced " + shortID(notes[0]) + " (deleted; git history keeps its text)"
-			}
+	var notes []string
+	for _, n := range ids {
+		if strings.HasPrefix(n, "notes/") && n != "notes/"+proj+"/"+newID {
+			notes = append(notes, n)
 		}
 	}
-	for _, r := range changed {
-		if err := s.DB.Upsert(s.Repo, r); err != nil {
-			return id + note, err
-		}
+	if len(notes) != 1 {
+		return fmt.Sprintf(" || supersedes=%q matched no single note — nothing was marked as replaced", prefix), nil
 	}
-	s.Event("learn", id, proj, kind)
-	if err := s.afterWrite(ctx, changed...); err != nil {
-		return id + note, err
+	if err := tx.Delete(notes[0], proj, "supersede", "->"+newID); err != nil {
+		return "", err
 	}
-	return id + note, nil
+	return " || replaced " + shortID(notes[0]) + " (deleted; git history keeps its text)", nil
 }
 
 func hasLetterOrDigit(s string) bool {
@@ -399,28 +385,30 @@ func (s *Store) AddFact(ctx context.Context, text, proj, category string, trust 
 	if trust <= 0 || trust > 1 {
 		trust = 0.5
 	}
-	unlock, err := s.lockWrite()
+	id := DetID("fact", text)
+	rel := "facts/" + proj + "/" + id + ".md"
+	err = s.Do(func(tx *Tx) error {
+		if _, err := os.Stat(filepath.Join(s.Repo, rel)); err == nil {
+			return nil
+		}
+		fm := map[string]any{"category": category, "trust": trust, "created": time.Now().UTC().Format(time.RFC3339Nano)}
+		if err := tx.Write(rel, md.Render(fm, text)); err != nil {
+			return err
+		}
+		tx.Event("fact_add", id, proj, category)
+		tx.Finish(ctx, "")
+		return nil
+	})
 	if err != nil {
 		return "", err
 	}
-	defer unlock()
-	id := DetID("fact", text)
-	rel := "facts/" + proj + "/" + id + ".md"
-	if _, err := os.Stat(filepath.Join(s.Repo, rel)); err == nil {
-		return id, nil
-	}
-	fm := map[string]any{"category": category, "trust": trust, "created": time.Now().UTC().Format(time.RFC3339Nano)}
-	if err := writeFile(filepath.Join(s.Repo, rel), md.Render(fm, text)); err != nil {
-		return "", err
-	}
-	s.Event("fact_add", id, proj, category)
-	return id, s.afterWrite(ctx, rel)
+	return id, nil
 }
 
 // resolve finds the single note or fact whose id starts with prefix. ok is false and msg says why otherwise.
 func (s *Store) resolve(prefix, proj string) (id string, msg string) {
 	prefix = strings.TrimSpace(prefix)
-	if len(prefix) < 4 {
+	if len(prefix) < MinIDPrefix {
 		return "", fmt.Sprintf("no single memory note matches %q (give at least 4 characters of the id recall prints) — nothing changed", prefix)
 	}
 	ids, err := s.DB.NodesByPrefix(prefix, proj)
@@ -439,45 +427,39 @@ func (s *Store) Retire(ctx context.Context, prefix, reason, proj string) (string
 			return "", err
 		}
 	}
-	unlock, err := s.lockWrite()
+	out := ""
+	err := s.Do(func(tx *Tx) error {
+		id, msg := s.resolve(prefix, proj)
+		if msg != "" {
+			out = msg
+			return nil
+		}
+		var p string
+		if err := s.DB.QueryRow(`SELECT project FROM nodes WHERE id=?`, id).Scan(&p); err != nil {
+			return err
+		}
+		reason = truncate(reason, 200)
+		if err := tx.Delete(id, p, "retire", reason); err != nil {
+			return err
+		}
+		tx.Finish(ctx, "")
+		out = "deleted " + shortID(id)
+		if reason != "" {
+			out += " (" + truncate(reason, 80) + ")"
+		}
+		return nil
+	})
 	if err != nil {
 		return "", err
-	}
-	defer unlock()
-	id, msg := s.resolve(prefix, proj)
-	if msg != "" {
-		return msg, nil
-	}
-	var p string
-	if err := s.DB.QueryRow(`SELECT project FROM nodes WHERE id=?`, id).Scan(&p); err != nil {
-		return "", err
-	}
-	if r := []rune(reason); len(r) > 200 {
-		reason = string(r[:200])
-	}
-	rel, err := s.removeNode(id, p, "retire", reason)
-	if err != nil {
-		return "", err
-	}
-	if err := s.afterWrite(ctx, rel); err != nil {
-		return "", err
-	}
-	out := "deleted " + shortID(id)
-	if reason != "" {
-		out += " (" + truncate(reason, 80) + ")"
 	}
 	return out, nil
 }
 
-// removeNode deletes the file of a note or fact and records the event (none when event is empty); the index and the committer are not told.
-// The caller holds s.mu.
-func (s *Store) removeNode(id, project, event, detail string) (rel string, err error) {
+// removeNode deletes the file of a note or fact; the index and the committer are not told. The caller holds the lock.
+func (s *Store) removeNode(id string) (rel string, err error) {
 	rel = id + ".md"
 	if err := os.Remove(filepath.Join(s.Repo, filepath.FromSlash(rel))); err != nil && !os.IsNotExist(err) {
 		return "", err
-	}
-	if event != "" {
-		s.Event(event, id, project, detail)
 	}
 	return rel, nil
 }
@@ -677,24 +659,16 @@ func (s *Store) linksFooter(id string) string {
 // only when its content would change; the index is updated and the committer is told. It reports whether it wrote.
 // An Index.md that the service did not generate (no `generated: true` in its frontmatter) is never overwritten: the
 // error is ErrHandWritten.
-func (s *Store) WriteIndexPage(ctx context.Context, proj string) (bool, error) {
-	unlock, err := s.lockWrite()
-	if err != nil {
-		return false, err
-	}
-	defer unlock()
-	rel, content, wrote, err := s.indexPageLocked(proj)
-	if err != nil || !wrote {
-		return false, err
-	}
-	if err := writeFile(filepath.Join(s.Repo, filepath.FromSlash(rel)), []byte(content)); err != nil {
-		return false, err
-	}
-	if err := s.DB.Upsert(s.Repo, rel); err != nil {
-		return false, err
-	}
-	s.finish(ctx, "", rel)
-	return true, nil
+func (s *Store) WriteIndexPage(ctx context.Context, proj string) (wrote bool, err error) {
+	err = s.Do(func(tx *Tx) error {
+		if err := tx.IndexPage(proj); err != nil {
+			return err
+		}
+		wrote = len(tx.changed) > 0
+		tx.Finish(ctx, "")
+		return nil
+	})
+	return wrote && err == nil, err
 }
 
 // indexPageLocked builds the index page of a project and says whether it must be written: not when the file already

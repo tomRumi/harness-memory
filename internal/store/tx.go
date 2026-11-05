@@ -113,6 +113,11 @@ func (tx *Tx) rollback() error {
 // Repo is the repository directory.
 func (tx *Tx) Repo() string { return tx.s.Repo }
 
+// Event records an event in events.db when the operation succeeds.
+func (tx *Tx) Event(kind, node, project, detail string) {
+	tx.events = append(tx.events, txEvent{kind, node, project, detail})
+}
+
 // Changed lists the files written or deleted so far, in order.
 func (tx *Tx) Changed() []string { return append([]string(nil), tx.changed...) }
 
@@ -144,12 +149,12 @@ func (tx *Tx) Delete(id, project, event, detail string) error {
 	if err := tx.remember(id + ".md"); err != nil {
 		return err
 	}
-	rel, err := tx.s.removeNode(id, project, "", "")
+	rel, err := tx.s.removeNode(id)
 	if err != nil {
 		return err
 	}
 	if event != "" {
-		tx.events = append(tx.events, txEvent{event, id, project, detail})
+		tx.Event(event, id, project, detail)
 	}
 	tx.note(rel)
 	return tx.s.DB.Upsert(tx.s.Repo, rel)
