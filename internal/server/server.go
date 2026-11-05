@@ -220,9 +220,7 @@ func (s *Server) recall(ctx context.Context, in RecallIn) (lines []string, warn 
 		var n int
 		s.DB.QueryRow(`SELECT count(*) FROM nodes WHERE kind IN ('note','fact') AND project = ?`, store.GlobalProject).Scan(&n)
 		if n > 0 {
-			var before = len(lines)
 			run("memory", []string{"note", "fact"}, store.GlobalProject, QuotaGlobal, "global ")
-			_ = before
 		}
 	}
 	if s.St != nil {

@@ -99,7 +99,7 @@ func sections(body string) []string {
 //	each note     an 8-word run of the note (a note under 8 words: the whole note) is in the new body
 //	numbers       every number of a note is in the section of the new body where its run was found
 //	links         every [[link]] resolves
-//	fences        the merge adds an even number of ``` or ~~~ lines
+//	fences        the merge leaves no ``` or ~~~ block open at the end (a page that already ended inside one is kept as it is)
 //	length        not shorter than the old body, not longer than old + 3 x the notes + 2,000 characters
 func CheckPage(oldBody, newBody string, notes []Note, resolve func(link string) bool) []string {
 	var probs []string
