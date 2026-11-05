@@ -261,7 +261,7 @@ func Pending(ctx context.Context, st *store.Store, project string, max int) ([]B
 		var q []string
 		for _, n := range ns {
 			b.Notes = append(b.Notes, n.Note)
-			q = append(q, truncateRunes(n.Text, queryNote))
+			q = append(q, wiki.Cut(n.Text, queryNote))
 		}
 		if b.Pages, err = listPages(st.Repo, p); err != nil {
 			return nil, err
@@ -276,13 +276,6 @@ func Pending(ctx context.Context, st *store.Store, project string, max int) ([]B
 		out = append(out, b)
 	}
 	return out, nil
-}
-
-func truncateRunes(s string, n int) string {
-	if r := []rune(s); len(r) > n {
-		return string(r[:n])
-	}
-	return s
 }
 
 // relatedByMeaning chooses the related pages by vectors: each note votes for the NotePages pages of the project whose

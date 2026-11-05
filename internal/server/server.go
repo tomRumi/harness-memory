@@ -95,22 +95,12 @@ func label(h index.Hit) string {
 		l += "::" + h.Section
 	}
 	if h.Kind == "note" || h.Kind == "fact" {
-		id := h.NodeID[strings.LastIndex(h.NodeID, "/")+1:]
-		if len(id) > 8 {
-			id = id[:8]
-		}
-		l += " #" + id
+		l += " #" + store.ShortID(h.NodeID)
 	}
 	return l
 }
 
-func clip(t string, n int) string {
-	t = strings.Join(strings.Fields(t), " ")
-	if r := []rune(t); len(r) > n {
-		return string(r[:n]) + "…"
-	}
-	return t
-}
+func clip(t string, n int) string { return wiki.Clip(strings.Join(strings.Fields(t), " "), n) }
 
 // Recall answers a query. It never returns an error to the caller: an empty index, no result and a failing part are
 // three different lines (`not built`, `no results`, `unavailable: <reason>`).

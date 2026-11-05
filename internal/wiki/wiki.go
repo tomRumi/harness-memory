@@ -44,9 +44,9 @@ func ValidTitle(title string) error {
 	case title == "":
 		return fmt.Errorf("a page title cannot be empty")
 	case len([]rune(title)) > MaxTitle:
-		return fmt.Errorf("page title %q is longer than %d characters", truncate(title), MaxTitle)
+		return fmt.Errorf("page title %q is longer than %d characters", Clip(title, 30), MaxTitle)
 	case len(title) > MaxTitleBytes:
-		return fmt.Errorf("page title %q is longer than %d bytes", truncate(title), MaxTitleBytes)
+		return fmt.Errorf("page title %q is longer than %d bytes", Clip(title, 30), MaxTitleBytes)
 	case title != strings.TrimSpace(title):
 		return fmt.Errorf("page title %q has a space at the start or the end", title)
 	case strings.HasPrefix(title, "."):
@@ -80,13 +80,6 @@ func ValidModelTitle(title string) error {
 func IsSpecial(title string) bool {
 	f := Fold(title)
 	return f == Fold(IndexTitle) || f == Fold(UnsortedTitle)
-}
-
-func truncate(s string) string {
-	if r := []rune(s); len(r) > 30 {
-		return string(r[:30]) + "…"
-	}
-	return s
 }
 
 // Meta is what a page says about itself in its frontmatter.

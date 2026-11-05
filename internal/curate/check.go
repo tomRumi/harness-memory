@@ -10,6 +10,7 @@ import (
 	"golang.org/x/text/unicode/norm"
 
 	"github.com/tomRumi/harness-memory-service/internal/md"
+	"github.com/tomRumi/harness-memory-service/internal/wiki"
 )
 
 // Window is the number of consecutive words of a note that must survive verbatim in the page.
@@ -111,7 +112,7 @@ func CheckPage(oldBody, newBody string, notes []Note, resolve func(link string) 
 			j++
 		}
 		if j == len(newLines) {
-			probs = append(probs, fmt.Sprintf("insert only: the old line %q is gone or out of order", clip(ol)))
+			probs = append(probs, fmt.Sprintf("insert only: the old line %q is gone or out of order", wiki.Clip(ol, 60)))
 			break
 		}
 		j++
@@ -175,7 +176,7 @@ func CheckPage(oldBody, newBody string, notes []Note, resolve func(link string) 
 	}
 	for _, l := range md.WikiLinks(newBody) {
 		if !oldLinks[l] && !resolve(l) {
-			probs = append(probs, fmt.Sprintf("broken link [[%s]]", clip(l)))
+			probs = append(probs, fmt.Sprintf("broken link [[%s]]", wiki.Clip(l, 60)))
 		}
 	}
 
@@ -208,18 +209,4 @@ func endsInFence(body string) bool {
 		f.Line(l)
 	}
 	return f.Open()
-}
-
-func short(id string) string {
-	if len(id) > 8 {
-		return id[:8]
-	}
-	return id
-}
-
-func clip(s string) string {
-	if r := []rune(s); len(r) > 60 {
-		return string(r[:60]) + "…"
-	}
-	return s
 }

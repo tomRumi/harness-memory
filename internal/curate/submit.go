@@ -77,7 +77,7 @@ func (r Report) String() string {
 			for i, id := range l.ids {
 				names[i] = id
 				if l.name != "unknown" {
-					names[i] = shortOf(id)
+					names[i] = short(id)
 				}
 			}
 			fmt.Fprintf(&b, "  %s: %s\n", l.name, strings.Join(names, " "))
@@ -86,10 +86,8 @@ func (r Report) String() string {
 	return b.String()
 }
 
-func shortOf(id string) string {
-	id = filepath.Base(id)
-	return short(strings.TrimSuffix(id, ".md"))
-}
+// short is the id recall prints for a note.
+var short = store.ShortID
 
 // Submit checks the pages of a model answer and writes them. See the design (section 3.3 and 4): the whole Submit
 // runs under the store's write lock and ends in one commit. A page that fails the check is not written; its notes go
@@ -155,7 +153,7 @@ func assignedIDs(sub Submission) ([][]string, error) {
 			if j, ok := owner[id]; ok && j == i {
 				continue
 			} else if ok {
-				return nil, fmt.Errorf("note %s is assigned to two pages (%q and %q): nothing written", shortOf(id), sub.Pages[j].Title, p.Title)
+				return nil, fmt.Errorf("note %s is assigned to two pages (%q and %q): nothing written", short(id), sub.Pages[j].Title, p.Title)
 			}
 			owner[id] = i
 			out[i] = append(out[i], id)

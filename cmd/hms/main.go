@@ -369,7 +369,7 @@ func main() {
 			}
 			cancel()
 		}
-		com := store.NewCommitter(p.repo, 3*time.Second)
+		com := store.NewCommitter(p.repo, store.QuietDelay)
 		var e index.Embedder
 		if emb != nil {
 			e = emb
@@ -518,7 +518,7 @@ func wikiCmd(p paths, args []string, stdout, stderr io.Writer) (code int) {
 			return 1
 		}
 	}
-	com := store.NewCommitter(p.repo, 3*time.Second)
+	com := store.NewCommitter(p.repo, store.QuietDelay)
 	st, err := store.New(p.repo, d, nil, com, filepath.Join(p.home, "events.db"))
 	if err != nil {
 		fmt.Fprintf(stderr, "hms: %v\n", err)
@@ -637,7 +637,7 @@ func curateCmd(p paths, args []string, stdin io.Reader, stdout, stderr io.Writer
 	if install.VectorsEnabled() {
 		e = embed.New(embed.Default())
 	}
-	com := store.NewCommitter(p.repo, 3*time.Second)
+	com := store.NewCommitter(p.repo, store.QuietDelay)
 	st, err := store.New(p.repo, d, e, com, filepath.Join(p.home, "events.db"))
 	if err != nil {
 		fmt.Fprintf(stderr, "hms: %v\n", err)

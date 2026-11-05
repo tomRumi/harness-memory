@@ -23,6 +23,8 @@ import (
 )
 
 const (
+	// QuietDelay is how long the committer waits after the last write before it commits.
+	QuietDelay = 3 * time.Second
 	// MinIDPrefix is the fewest characters of an id that name a note.
 	MinIDPrefix = 4
 	// MaxNote is the longest note kept in full; longer text is cut and ends with an ellipsis.
@@ -328,7 +330,7 @@ func (s *Store) supersede(tx *Tx, prefix, proj, newID string) (string, error) {
 	if err := tx.Delete(notes[0], proj, "supersede", "->"+newID); err != nil {
 		return "", err
 	}
-	return " || replaced " + shortID(notes[0]) + " (deleted; git history keeps its text)", nil
+	return " || replaced " + ShortID(notes[0]) + " (deleted; git history keeps its text)", nil
 }
 
 func hasLetterOrDigit(s string) bool {
@@ -340,8 +342,9 @@ func hasLetterOrDigit(s string) bool {
 	return false
 }
 
-func shortID(nodeID string) string {
-	b := filepath.Base(nodeID)
+// ShortID is the first 8 characters of the last part of a node id or file name: the id recall prints.
+func ShortID(nodeID string) string {
+	b := filepath.Base(strings.TrimSuffix(nodeID, ".md"))
 	if len(b) > 8 {
 		return b[:8]
 	}
@@ -415,14 +418,14 @@ func (s *Store) Retire(ctx context.Context, prefix, reason, proj string) (string
 		if err := s.DB.QueryRow(`SELECT project FROM nodes WHERE id=?`, id).Scan(&p); err != nil {
 			return err
 		}
-		reason = truncate(reason, 200)
+		reason = wiki.Cut(reason, 200)
 		if err := tx.Delete(id, p, "retire", reason); err != nil {
 			return err
 		}
 		tx.Finish(ctx, "")
-		out = "deleted " + shortID(id)
+		out = "deleted " + ShortID(id)
 		if reason != "" {
-			out += " (" + truncate(reason, 80) + ")"
+			out += " (" + wiki.Cut(reason, 80) + ")"
 		}
 		return nil
 	})
@@ -439,13 +442,6 @@ func (s *Store) removeNode(id string) (rel string, err error) {
 		return "", err
 	}
 	return rel, nil
-}
-
-func truncate(s string, n int) string {
-	if r := []rune(s); len(r) > n {
-		return string(r[:n])
-	}
-	return s
 }
 
 // Feedback records whether a recalled note helped. Ratings go to events.db; they never remove a hit by themselves.
@@ -479,7 +475,7 @@ func (s *Store) Feedback(prefix string, helpful bool, proj, session string) (str
 	s.DB.QueryRow(`SELECT project FROM nodes WHERE id=?`, id).Scan(&p)
 	s.Event(kind, id, p, session)
 	h, u := s.Ratings(id)
-	return fmt.Sprintf("recorded %s for %s (sessions: helpful %d, unhelpful %d)", kind, shortID(id), h, u), nil
+	return fmt.Sprintf("recorded %s for %s (sessions: helpful %d, unhelpful %d)", kind, ShortID(id), h, u), nil
 }
 
 // Ratings returns how many sessions rated a node helpful and unhelpful, by each session's last rating.
