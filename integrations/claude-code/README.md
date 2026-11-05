@@ -1,10 +1,10 @@
 # Claude Code: recall before every prompt
 
-`hms recall -format=context -hook` reads the `UserPromptSubmit` payload (JSON with `prompt` and `cwd`) on standard
+`hms recall -format=context -hook` reads the `UserPromptSubmit` payload (JSON with `prompt`) on standard
 input and prints the matching memory in a `<memory-context>` block. Claude Code adds what a `UserPromptSubmit` hook
 prints on standard output to the prompt. The command always exits 0 and prints nothing when it finds nothing, when the
 index is missing, when the payload is malformed, or when it takes longer than 3 seconds, so it cannot block a prompt.
-The project is taken from the directory the session runs in (the code roots in `projects.yaml`).
+Add `-p <project>` to limit the recall to one project; without it every project is searched.
 
 ## Settings (`~/.claude/settings.json`, or `.claude/settings.json` in a project)
 
