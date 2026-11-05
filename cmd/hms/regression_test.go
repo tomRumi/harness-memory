@@ -292,3 +292,52 @@ func TestFailedCommitIsReportedByEveryWritingCommand(t *testing.T) {
 		t.Errorf("left loose after the fix: %q", s)
 	}
 }
+
+// Third review, recipe: the text names the git outputs it relies on, and git really prints them (scripts/test/recipe-git.sh).
+func TestRecipeStopsOnADivergedOrConflictedPull(t *testing.T) {
+	read := func(rel string) string {
+		b, err := os.ReadFile(filepath.Join("..", "..", filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	recipe, design := read("integrations/curation-by-a-harness.md"), read("docs/design.md")
+	steps, rest, _ := strings.Cut(recipe, "## The job prompt")
+	prompt, _, _ := strings.Cut(rest, "## Conflicts")
+	step1 := steps[strings.Index(steps, "1. Check the repository first"):strings.Index(steps, "\n2. ")]
+	promptStep1 := prompt[strings.Index(prompt, "1. cd to"):strings.Index(prompt, "\n2. Run")]
+	for name, text := range map[string]string{"recipe step 1": step1, "prompt step 1": promptStep1} {
+		for _, want := range []string{"git pull --rebase", "git status", "have diverged", "Unmerged paths", "git rebase --abort", "Never reset"} {
+			if !strings.Contains(text, want) {
+				t.Errorf("%s lacks %q", name, want)
+			}
+		}
+		if i, j := strings.Index(text, "git pull --rebase"), strings.LastIndex(text, "have diverged"); i < 0 || j < i {
+			t.Errorf("%s: the status check must come after the pull", name)
+		}
+	}
+	for _, want := range []string{"have diverged", "git rebase --abort", "ahead and behind"} {
+		if !strings.Contains(design, want) {
+			t.Errorf("design lacks %q", want)
+		}
+	}
+	for name, text := range map[string]string{"design": design, "recipe": recipe, "reference": read("docs/reference.md")} {
+		if strings.Contains(text, "committed by the next `hms` command that writes.") {
+			t.Errorf("%s still claims every leftover is committed", name)
+		}
+		if strings.Contains(text, "as Obsidian and macOS do") || strings.Contains(text, "as the file system does") {
+			t.Errorf("%s still overclaims the title comparison", name)
+		}
+	}
+	if strings.Contains(recipe, "until the repository is clean") {
+		t.Error("the Conflicts paragraph still overclaims")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is needed by the script")
+	}
+	out, err := exec.Command("sh", filepath.Join("..", "..", "scripts", "test", "recipe-git.sh")).CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "PASS") {
+		t.Fatalf("recipe-git.sh: %v\n%s", err, out)
+	}
+}

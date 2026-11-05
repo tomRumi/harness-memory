@@ -7,7 +7,7 @@ The service has no model of its own. A scheduled job in any agent harness writes
 
 ## What the job does, every run
 
-1. Check the repository first. If `git status --porcelain` shows anything other than untracked files (`??`), or `git status` says a rebase or merge is in progress, or HEAD is detached, stop and tell the owner. Run `hms doctor`; stop on a FAIL or on a repository-state WARN. Then, if the memory repository has a remote: `git pull --rebase`.
+1. Check the repository first. If `git status --porcelain` shows anything other than untracked files (`??`), or `git status` says a rebase or merge is in progress, or HEAD is detached, or `git status -sb` shows the branch both ahead of and behind its remote (`have diverged`), stop and tell the owner. Run `hms doctor`; stop on a FAIL or on a repository-state WARN. Then, if the memory repository has a remote: `git pull --rebase`, and look at `git status` again. If it shows a rebase in progress, conflicts (`Unmerged paths`) or `have diverged`: run `git rebase --abort` if a rebase is in progress, stop, and tell the owner. Never reset, never force.
 2. `hms curate -pending` prints a JSON list, one entry per project that has waiting notes. Nothing waiting: stop.
 3. For each entry, write the new pages as the entry's `prompt` says and save the answer as JSON.
 4. `hms curate -submit FILE` hands the answer back and prints one line per page: `merged`, `unsorted` (the page failed a check and its notes went to the page Unsorted) or `stale` (someone edited the page meanwhile; the notes stay for the next run).
@@ -23,10 +23,14 @@ You are the curator of a markdown memory. Work only with the commands below.
 
 1. cd to the memory directory (HMS_HOME is set; the repository is $HMS_HOME/memory).
    Run: git status --porcelain, and git status. If anything other than untracked files (??)
-   is listed, or a rebase or a merge is in progress, or HEAD is detached: stop and tell the
+   is listed, or a rebase or a merge is in progress, or HEAD is detached, or git status -sb
+   shows the branch both ahead and behind its remote ("have diverged"): stop and tell the
    owner. Run: hms doctor. If it prints a FAIL or a WARN about the repository state: stop and
    tell the owner.
-   If the repository has a git remote, run: git pull --rebase
+   If the repository has a git remote, run: git pull --rebase, then run git status again.
+   If it shows a rebase in progress, conflicts ("Unmerged paths") or "have diverged": run
+   git rebase --abort if a rebase is in progress, then stop and tell the owner. Never reset,
+   never force.
 2. Run: hms curate -pending > /tmp/pending.json
    If the file holds [] , reply "nothing to merge" and stop.
 3. For each entry of the list: read its "prompt" and follow it exactly, using the entry's
@@ -41,7 +45,7 @@ You are the curator of a markdown memory. Work only with the commands below.
 
 ## Conflicts
 
-After `git rebase --abort` the repository is back at its last local commit, with the merge in it. The owner resolves the difference with the remote by hand; the next run of the job stops at step 1 until the repository is clean.
+After `git rebase --abort` the repository is back at its last local commit, with the merge in it. The owner resolves the difference with the remote by hand; the local branch is then ahead of and behind the remote, so the next run of the job stops at step 1 ("have diverged") until the owner has brought the two together.
 
 ## Settings on the machine that runs the job
 
@@ -54,4 +58,4 @@ Set `HMS_LLM_URL` and `HMS_LLM_MODEL` (and `HMS_LLM_KEY` if the server wants one
 
 ## What a failed check means
 
-A page that fails a check is not written. Its notes go to `Unsorted` as plain bullets, so nothing blocks. Leftovers of an interrupted run (files written but not yet committed) are committed by the next `hms` command that writes. The report names the reason: an old line changed or moved, a note whose words or numbers did not arrive, a new link to a page that does not exist, a merge that leaves a code fence open at the end of the page, or a runaway length. Read `Unsorted` now and then and sort it into pages.
+A page that fails a check is not written. Its notes go to `Unsorted` as plain bullets, so nothing blocks. Leftovers of an interrupted run (files written but not yet committed) are committed by the next `hms` command that writes, as far as it can see them (new, changed, deleted or staged files of notes, facts and wiki pages). A commit that fails is reported (`committed: NO (...)`, exit status 1) and `hms doctor` shows a blocked repository; the files stay saved. The report names the reason: an old line changed or moved, a note whose words or numbers did not arrive, a new link to a page that does not exist, a merge that leaves a code fence open at the end of the page, or a runaway length. Read `Unsorted` now and then and sort it into pages.
