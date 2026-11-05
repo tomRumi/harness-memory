@@ -34,6 +34,9 @@ func (d *DB) Upsert(repo, rel string) error {
 		if err := remove(); err != nil {
 			return err
 		}
+		if err := resolveLinks(tx); err != nil {
+			return err
+		}
 		return tx.Commit()
 	}
 	if err != nil {
@@ -43,6 +46,9 @@ func (d *DB) Upsert(repo, rel string) error {
 	hash, _, ok := c.prepare(raw)
 	if !ok {
 		if err := remove(); err != nil {
+			return err
+		}
+		if err := resolveLinks(tx); err != nil {
 			return err
 		}
 		return tx.Commit()
@@ -57,6 +63,9 @@ func (d *DB) Upsert(repo, rel string) error {
 	p, _ := c.parse(raw)
 	if err := insert(tx, p); err != nil {
 		return fmt.Errorf("%s: %w", id, err)
+	}
+	if err := resolveLinks(tx); err != nil {
+		return err
 	}
 	return tx.Commit()
 }

@@ -15,6 +15,7 @@ import (
 
 	"github.com/tomRumi/harness-memory-service/internal/chunk"
 	"github.com/tomRumi/harness-memory-service/internal/md"
+	"github.com/tomRumi/harness-memory-service/internal/wiki"
 )
 
 // Relations that frontmatter may declare. Anything else in frontmatter is ignored by the edge extractor.
@@ -35,6 +36,7 @@ type parsed struct {
 
 type nodeRow struct {
 	ID, Kind, Project, Path, Title, NoteKind, Created, Updated, Hash string
+	Summary, Aliases                                                 string // wiki pages only; aliases are one per line
 	Pinned                                                           bool
 }
 
@@ -133,6 +135,11 @@ func parseMarkdown(kind, rel string, raw []byte) parsedWithWarn {
 	}
 	id := strings.TrimSuffix(rel, ".md")
 	title := doc.Str("title")
+	var meta wiki.Meta
+	if kind == "wiki" { // a page's title is its frontmatter title or its file name, never a heading
+		meta = wiki.ParseMeta(doc, strings.TrimSuffix(segs[len(segs)-1], ".md"))
+		title = meta.Title
+	}
 	if title == "" {
 		for _, ln := range strings.Split(doc.Body, "\n") {
 			if strings.HasPrefix(ln, "# ") {
@@ -151,6 +158,13 @@ func parseMarkdown(kind, rel string, raw []byte) parsedWithWarn {
 	n := nodeRow{ID: id, Kind: strings.TrimSuffix(kind, "s"), Project: project, Path: rel, Title: title,
 		Pinned:   doc.Bool("pinned"),
 		NoteKind: nk, Created: doc.Str("created"), Updated: doc.Str("updated"), Hash: sum(raw)}
+	if kind == "wiki" {
+		n.Summary = meta.Summary
+		if n.Summary == "" {
+			n.Summary = wiki.FirstSentence(doc.Body)
+		}
+		n.Aliases = strings.Join(meta.Aliases, "\n")
+	}
 	var pieces []chunk.Piece
 	if kind == "wiki" {
 		pieces = chunk.Wiki(doc.Body)
@@ -273,6 +287,9 @@ func (d *DB) Rescan(repo string) (Result, error) {
 		}
 		res.Removed++
 	}
+	if err := resolveLinks(tx); err != nil {
+		return res, err
+	}
 	return res, tx.Commit()
 }
 
@@ -282,9 +299,9 @@ func insert(tx *sql.Tx, p parsed) error {
 	if n.Pinned {
 		pin = 1
 	}
-	if _, err := tx.Exec(`INSERT INTO nodes(id,kind,project,path,stem,title,pinned,note_kind,created_at,updated_at,content_hash)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?)`, n.ID, n.Kind, n.Project, n.Path, strings.TrimSuffix(filepath.Base(n.Path), ".md"), n.Title, pin,
-		n.NoteKind, n.Created, n.Updated, n.Hash); err != nil {
+	if _, err := tx.Exec(`INSERT INTO nodes(id,kind,project,path,stem,title,pinned,note_kind,created_at,updated_at,content_hash,summary,aliases)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, n.ID, n.Kind, n.Project, n.Path, strings.TrimSuffix(filepath.Base(n.Path), ".md"), n.Title, pin,
+		n.NoteKind, n.Created, n.Updated, n.Hash, n.Summary, n.Aliases); err != nil {
 		return err
 	}
 	for i, c := range p.chunks {

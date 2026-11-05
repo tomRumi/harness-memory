@@ -43,7 +43,7 @@ func (d *DB) StateHash() (string, map[string]int, error) {
 	if err := feed("chunk", `SELECT node_id,seq,section,text_hash FROM chunks ORDER BY node_id,seq`, 4); err != nil {
 		return "", nil, err
 	}
-	if err := feed("edge", `SELECT subject_id,relation,object_ref,source FROM edges ORDER BY subject_id,relation,object_ref,source`, 4); err != nil {
+	if err := feed("edge", `SELECT subject_id,relation,object_ref,source,resolved,status FROM edges ORDER BY subject_id,relation,object_ref,source`, 6); err != nil {
 		return "", nil, err
 	}
 	return hex.EncodeToString(h.Sum(nil)), counts, nil
@@ -89,7 +89,7 @@ func (d *DB) NodeDigests() (map[string]string, error) {
 	if err := scan(`SELECT node_id,seq,section,text_hash FROM chunks ORDER BY node_id,seq`, 4, "c"); err != nil {
 		return nil, err
 	}
-	if err := scan(`SELECT subject_id,relation,object_ref,source FROM edges ORDER BY subject_id,relation,object_ref,source`, 4, "e"); err != nil {
+	if err := scan(`SELECT subject_id,relation,object_ref,source,resolved,status FROM edges ORDER BY subject_id,relation,object_ref,source`, 6, "e"); err != nil {
 		return nil, err
 	}
 	res := map[string]string{}
