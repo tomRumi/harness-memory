@@ -119,16 +119,26 @@ func prepare(p Paths, out io.Writer) error {
 		}
 	}
 	gi := filepath.Join(p.Repo, ".gitignore")
+	madeIgnore := false
 	if _, err := os.Stat(gi); os.IsNotExist(err) {
 		if err := os.WriteFile(gi, []byte("*.db\n*.db-shm\n*.db-wal\n"), 0o644); err != nil {
 			return err
 		}
+		madeIgnore = true
 	}
 	if _, err := os.Stat(filepath.Join(p.Repo, ".git")); os.IsNotExist(err) {
 		if _, err := exec.LookPath("git"); err != nil {
 			fmt.Fprintln(out, "warning: the git program is not installed; notes will be saved as files without commits")
 		} else if o, err := exec.Command("git", "-C", p.Repo, "init", "-q", "-b", "main").CombinedOutput(); err != nil {
 			fmt.Fprintf(out, "warning: git init failed (%v): %s\n", err, strings.TrimSpace(string(o)))
+		} else if madeIgnore {
+			// the initial commit holds the .gitignore, so `git status` is clean after init
+			c := exec.Command("git", "-C", p.Repo, "-c", "user.name=hms", "-c", "user.email=hms@localhost", "commit", "-q", "-m", "hms init", "--", ".gitignore")
+			if o, err := exec.Command("git", "-C", p.Repo, "add", "--", ".gitignore").CombinedOutput(); err != nil {
+				fmt.Fprintf(out, "warning: git add failed (%v): %s\n", err, strings.TrimSpace(string(o)))
+			} else if o, err := c.CombinedOutput(); err != nil {
+				fmt.Fprintf(out, "warning: the first commit failed (%v): %s\n", err, strings.TrimSpace(string(o)))
+			}
 		}
 	}
 	d, err := index.Open(p.DB)

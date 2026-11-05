@@ -509,6 +509,7 @@ func wikiCmd(p paths, args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	com := store.NewCommitter(p.repo, 3*time.Second)
+	sweepLeftovers(p.repo, com)
 	st, err := store.New(p.repo, d, nil, com, filepath.Join(p.home, "events.db"))
 	if err != nil {
 		fmt.Fprintf(stderr, "hms: %v\n", err)
@@ -631,7 +632,11 @@ func curateCmd(p paths, args []string, stdin io.Reader, stdout, stderr io.Writer
 	if install.VectorsEnabled() {
 		e = embed.New(embed.Default())
 	}
-	st, err := store.New(p.repo, d, e, store.NewCommitter(p.repo, 3*time.Second), filepath.Join(p.home, "events.db"))
+	com := store.NewCommitter(p.repo, 3*time.Second)
+	if *submit != "" || *apply {
+		sweepLeftovers(p.repo, com)
+	}
+	st, err := store.New(p.repo, d, e, com, filepath.Join(p.home, "events.db"))
 	if err != nil {
 		fmt.Fprintf(stderr, "hms: %v\n", err)
 		return 1
@@ -777,4 +782,12 @@ func recallContext(p paths, proj string, hook bool, query string, vectors bool, 
 		fmt.Fprintln(stderr, "hms: recall took longer than", ContextTimeout, "- skipped")
 	}
 	return 0
+}
+
+// sweepLeftovers commits the notes and pages that an earlier run left uncommitted (it was killed between writing and
+// committing). Every command that writes does it first, so the files never wait for a serve to be started.
+func sweepLeftovers(repo string, com *store.Committer) {
+	store.CleanTemp(repo)
+	com.Sweep()
+	com.Flush()
 }

@@ -338,6 +338,10 @@ func Submit(ctx context.Context, st *store.Store, sub Submission) (Report, error
 	if err != nil {
 		return rep, err
 	}
+	// Commit now, before the slow copy check: a kill from here on leaves the files committed, not loose.
+	if st.Commit != nil {
+		st.Commit.Flush()
+	}
 	var mat *index.Matrix // vectors of the existing pages, loaded for the first new page
 	for _, title := range newPages {
 		if w := copyWarning(ctx, st, project, title, &mat); w != "" {

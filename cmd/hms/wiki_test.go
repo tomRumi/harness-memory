@@ -72,10 +72,15 @@ func TestWikiLinksIndexAndDoctorTranscript(t *testing.T) {
 	if err != nil || !strings.Contains(string(log), "wiki/proj/Index.md") {
 		t.Fatalf("the index page was not committed: %v\n%s", err, log)
 	}
-	if n, _ := exec.Command("git", "-C", repo, "rev-list", "--count", "HEAD").Output(); strings.TrimSpace(string(n)) != "1" {
-		t.Fatalf("one commit expected for the first index run, got %s", n)
+	// three commits: init (.gitignore), the sweep at the start of the first writing command (the loose hand-written
+	// pages of the fixture), and the one commit of the three index pages
+	if n, _ := exec.Command("git", "-C", repo, "rev-list", "--count", "HEAD").Output(); strings.TrimSpace(string(n)) != "3" {
+		t.Fatalf("three commits expected after the first index run, got %s", n)
 	}
-	// the index pages are all committed; the hand-written pages are not the index command's to commit
+	if head, _ := exec.Command("git", "-C", repo, "show", "--name-only", "--format=", "HEAD").Output(); strings.Count(string(head), "Index.md") != 3 || strings.Count(strings.TrimSpace(string(head)), "\n") != 2 {
+		t.Fatalf("the last commit must hold exactly the three index pages:\n%s", head)
+	}
+	// the index pages are all committed
 	if st, _ := exec.Command("git", "-C", repo, "status", "--porcelain", "--", "wiki/proj/Index.md", "wiki/other/Index.md", "wiki/third/Index.md").Output(); len(st) != 0 {
 		t.Fatalf("status: %s", st)
 	}
