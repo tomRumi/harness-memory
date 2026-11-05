@@ -293,3 +293,45 @@ func (m *Matrix) TopK(q []float32, k int, f Filter) ([]int64, error) {
 	}
 	return ids, nil
 }
+
+// ChunkCounts counts the wiki, note and fact chunks that have a vector for model, and all of them.
+func (d *DB) ChunkCounts(model string) (embedded, total int, err error) {
+	err = d.QueryRow(`SELECT count(*) FROM chunks c JOIN nodes n ON n.id=c.node_id WHERE n.kind IN ` + vectorKinds).Scan(&total)
+	if err != nil {
+		return
+	}
+	err = d.QueryRow(`SELECT count(*) FROM chunks c JOIN nodes n ON n.id=c.node_id WHERE n.kind IN `+vectorKinds+
+		` AND EXISTS (SELECT 1 FROM vec.vectors v WHERE v.text_hash=c.text_hash AND v.model=?)`, model).Scan(&embedded)
+	return
+}
+
+// StoredDims lists the distinct vector sizes stored for model.
+func (d *DB) StoredDims(model string) ([]int, error) {
+	rows, err := d.Query(`SELECT DISTINCT dim FROM vec.vectors WHERE model=? ORDER BY dim`, model)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []int
+	for rows.Next() {
+		var n int
+		if err := rows.Scan(&n); err != nil {
+			return nil, err
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
+// ProbeIfEmpty tells why vectors are unavailable when Hybrid cannot: with no stored vectors Hybrid never calls the
+// embedder, so a dead one would go unnoticed. It returns nil when there is no embedder, when the matrix has vectors
+// (Hybrid reports its own errors) or when the embedder answers.
+func ProbeIfEmpty(ctx context.Context, e Embedder, m *Matrix) error {
+	if e == nil || (m != nil && len(m.IDs) > 0) {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, QueryEmbedTimeout)
+	defer cancel()
+	_, err := e.Query(ctx, "health")
+	return err
+}

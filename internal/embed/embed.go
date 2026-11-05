@@ -31,7 +31,7 @@ type Config struct {
 // Default is the configuration used when nothing is set: a local Ollama with nomic-embed-text.
 // HMS_EMBED_API, HMS_EMBED_URL, HMS_EMBED_MODEL, HMS_EMBED_KEY, HMS_EMBED_DOC_PREFIX and HMS_EMBED_QUERY_PREFIX override it.
 func Default() Config {
-	c := Config{API: "ollama", URL: "http://localhost:11434", Model: "nomic-embed-text",
+	c := Config{API: "ollama", URL: "http://localhost:11434", Model: DefaultModel,
 		DocPrefix: "search_document: ", QueryPrefix: "search_query: "}
 	if v := os.Getenv("HMS_EMBED_API"); v != "" {
 		c.API = v
