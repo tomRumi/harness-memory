@@ -53,7 +53,7 @@ the original ranking. Here the files are the record and the index is disposable.
 
 ## What works today
 
-`hms init`, `rescan`, `recall`, `embed`, `stats`, `hash`, `digests`, `bench`, `serve`. Seven MCP tools: `recall`,
+`hms init`, `rescan`, `recall`, `embed`, `stats`, `hash`, `digests`, `bench`, `serve`, `curate`, `restore`. Seven MCP tools: `recall`,
 `learn`, `wiki_read`, `fact_add`, `retire`, `feedback`, `stats`. Tools list size: about 840 tokens.
 Staging cap of 50 active notes per project (the oldest are archived, never deleted). Check for merges
 (`internal/gate`), a port of the earlier service's check: no heading lost, length in bounds, each note keeps a verbatim
@@ -62,7 +62,7 @@ judge meaning; curation only appends and keeps the notes, so a bad merge is reco
 
 ## Not built yet
 
-Automatic curation (the merge that calls the gate), a provider for each agent harness, the Claude Code hook, autosave, sync and
+The weekly duplicate and worst-rated reports, a provider for each agent harness, the Claude Code hook, autosave, sync and
 the one-curator rule, backup, `import claude`, a `recall --format=context` for hooks, the weekly report.
 
 ## Install (from source)

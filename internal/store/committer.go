@@ -179,9 +179,9 @@ func (c *Committer) commit(snap []string) error {
 		return nil
 	}
 	for _, f := range strings.Split(staged, "\n") {
-		if !strings.HasPrefix(f, "notes/") && !strings.HasPrefix(f, "facts/") {
+		if !strings.HasPrefix(f, "notes/") && !strings.HasPrefix(f, "facts/") && !strings.HasPrefix(f, "wiki/") {
 			// the owner has staged something else; committing now would sweep it into a memory commit
-			return fmt.Errorf("not committing: %q is staged and is not a note or a fact", f)
+			return fmt.Errorf("not committing: %q is staged and is not a note, a fact or a wiki entry", f)
 		}
 	}
 	msg := fmt.Sprintf("memory: %d change(s)", len(snap))
