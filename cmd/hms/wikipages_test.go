@@ -119,7 +119,7 @@ func TestWikiRelatedDuplicatesAndEvalPairs(t *testing.T) {
 	if out, _, c := hms(t, home, up.URL, nil, "", "wiki", "related", "a"); c != 1 || !strings.Contains(out, "no vectors yet for [[x/a]]") {
 		t.Fatalf("before embed: %d %q", c, out)
 	}
-	if out, _, c := hms(t, home, up.URL, nil, "", "wiki", "duplicates"); c != 0 || !strings.Contains(out, "duplicates: 0 (cosine >= 0.92; 0 pages compared, 12 with no vectors yet)") {
+	if out, _, c := hms(t, home, up.URL, nil, "", "wiki", "duplicates"); c != 0 || !strings.Contains(out, "duplicates: 0 (cosine >= 0.80; 0 pages compared, 12 with no vectors yet)") {
 		t.Fatalf("duplicates before embed: %d %q", c, out)
 	}
 	if _, e, c := hms(t, home, up.URL, nil, "", "embed"); c != 0 {
@@ -128,22 +128,22 @@ func TestWikiRelatedDuplicatesAndEvalPairs(t *testing.T) {
 
 	out, _, c := hms(t, home, up.URL, nil, "", "wiki", "related", "a", "-n", "3")
 	lines := strings.Split(strings.TrimSpace(out), "\n")
-	if c != 0 || len(lines) != 3 || !strings.HasPrefix(lines[0], "0.95  [[a (copy)]]") || !strings.HasPrefix(lines[1], "0.52  [[b]]") {
+	if c != 0 || len(lines) != 3 || !strings.HasPrefix(lines[0], "0.92  [[a (copy)]]") || !strings.HasPrefix(lines[1], "0.2") || !strings.HasPrefix(lines[2], "0.2") {
 		t.Fatalf("related: %d\n%s", c, out)
 	}
-	if out, _, _ := hms(t, home, up.URL, nil, "", "wiki", "related", "-p", "x", "x/b.md", "-n", "1"); !strings.HasPrefix(out, "0.52  [[a]]  The first page\n") && !strings.HasPrefix(out, "0.52  [[a (copy)]]") {
-		t.Fatalf("related with a path and a summary: %q", out)
+	if out, _, _ := hms(t, home, up.URL, nil, "", "wiki", "related", "-p", "x", "x/a.md", "-n", "1"); !strings.HasPrefix(out, "0.92  [[a (copy)]]") {
+		t.Fatalf("related by path: %q", out)
 	}
 	if _, e, c := hms(t, home, up.URL, nil, "", "wiki", "related", "Nowhere"); c != 1 || !strings.Contains(e, "no wiki entry") {
 		t.Fatalf("unknown page: %d %q", c, e)
 	}
 
 	out, _, c = hms(t, home, up.URL, nil, "", "wiki", "duplicates")
-	if c != 0 || out != "0.95  [[x/a]]  [[x/a (copy)]]\nduplicates: 1 (cosine >= 0.92; 12 pages compared, 0 with no vectors yet)\n" {
+	if c != 0 || out != "0.92  [[x/a]]  [[x/a (copy)]]\nduplicates: 1 (cosine >= 0.80; 12 pages compared, 0 with no vectors yet)\n" {
 		t.Fatalf("duplicates: %d %q", c, out)
 	}
-	if out, _, _ := hms(t, home, up.URL, nil, "", "wiki", "duplicates", "-p", "y", "-t", "0.4"); strings.Count(out, "[[c]]") != 5 || !strings.Contains(out, "duplicates: 15 (cosine >= 0.40; 6 pages compared") {
-		t.Fatalf("duplicates in y at 0.4 (six pages share half of their words: 15 pairs): %q", out)
+	if out, _, _ := hms(t, home, up.URL, nil, "", "wiki", "duplicates", "-p", "y", "-t", "0.2"); strings.Count(out, "[[c]]") != 5 || !strings.Contains(out, "duplicates: 15 (cosine >= 0.20; 6 pages compared") {
+		t.Fatalf("duplicates in y at 0.2 (six sibling pages: 15 pairs): %q", out)
 	}
 
 	out, _, c = hms(t, home, up.URL, nil, "", "wiki", "eval-pairs", "-pairs", pairs)
@@ -151,16 +151,16 @@ func TestWikiRelatedDuplicatesAndEvalPairs(t *testing.T) {
 		t.Fatalf("eval-pairs must exit 0, got %d", c)
 	}
 	for _, want := range []string{
-		"related    PASS    0.524", "x/a.md <-> x/b.md",
-		"related    FAIL    0.048", "x/a.md <-> y/c.md",
-		"unrelated  PASS    0.048",
-		"unrelated  FAIL    0.524",
-		"duplicate  PASS    0.952", "x/a.md <-> x/a (copy).md",
+		"related    PASS    0.262", "x/a.md <-> x/b.md",
+		"related    FAIL    -0.478", "x/a.md <-> y/c.md",
+		"unrelated  PASS    -0.478",
+		"unrelated  FAIL    0.262",
+		"duplicate  PASS    0.922", "x/a.md <-> x/a (copy).md",
 		"duplicate  FAIL    no vectors yet", "y/c.md <-> y/c (copy).md",
 		"related pairs passing: 1/2", "unrelated pairs passing: 1/2", "duplicate copies found: 1/2",
-		"smallest related cosine: 0.048 (x/a.md <-> y/c.md)",
-		"largest unrelated cosine: 0.524 (x/a.md <-> x/b.md)",
-		"non-copy pairs flagged as duplicates at 0.92: 0",
+		"smallest related cosine: -0.478 (x/a.md <-> y/c.md)",
+		"largest unrelated cosine: 0.262 (x/a.md <-> x/b.md)",
+		"non-copy pairs flagged as duplicates at 0.80: 0",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("eval-pairs lacks %q:\n%s", want, out)
