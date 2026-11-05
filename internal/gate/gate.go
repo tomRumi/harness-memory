@@ -1,22 +1,23 @@
-// Package gate is the integrity check that curated text must pass before it is committed. Nothing in it is
-// model-based: it counts and compares. It does not judge meaning; its job is that no number, name or path is lost.
+// Package gate is the check that curated text must pass before it is committed. It is a port of the predecessor's
+// validate() (consolidate.py:106-128) with its one known fault removed, plus one addition: a number that is in a note
+// must still be in the text that replaces it.
 //
-// Two checks share the extraction of "hard values":
-//   - CheckAppend: a section written from notes (the automatic path). Every note must survive in it, and every hard
-//     value of a note must appear in the list item or paragraph that cites that note.
-//   - CheckReplace: new text for an existing entry (the `merge --rewrite` path). Headings, code fences and every hard
-//     value of the old text must survive, and the length must stay within bounds.
+// Nothing in it is model-based and it does not judge meaning. Curation only appends, notes are superseded and never
+// deleted, and everything is in git, so a bad merge can always be recovered; the check exists to stop the common
+// accident (a note dropped, a section that is far too short, a fact reduced to a wish), not to defend against anything.
 //
-// The note test is a port of the predecessor (consolidate.py:106-128) with its one known fault removed: a note
-// shorter than eight words used to fail always; here such a note must appear whole.
+//   - CheckAppend: a section written from notes (the automatic path). Every note must survive in it, the length must
+//     be in bounds, and the numbers of a note must be in the list item or paragraph that cites it.
+//   - CheckReplace: new text for an existing entry (the `merge --rewrite` path). No heading lost, code fences
+//     balanced and unchanged in number, length in bounds, and every number of the old text still present.
+//
+// A note shorter than eight words used to fail the predecessor's check always; here such a note must appear whole.
 package gate
 
 import (
 	"fmt"
 	"regexp"
-	"strconv"
 	"strings"
-	"unicode"
 )
 
 const (
@@ -26,210 +27,69 @@ const (
 )
 
 var (
-	spaces  = regexp.MustCompile(`\s+`)
-	h2      = regexp.MustCompile(`(?m)^## .*$`)
-	fenceRe = regexp.MustCompile("(?m)^\\s*```")
-
-	// hard values: things that are wrong if one character changes
-	reURL      = regexp.MustCompile(`https?://[^\s)>\]"']+`)
-	rePath     = regexp.MustCompile(`(?:~|\.{1,2})?/[A-Za-z0-9._@-]+(?:/[A-Za-z0-9._@-]+)*|\b[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)+\b`)
-	reIP       = regexp.MustCompile(`\b\d{1,3}(?:\.\d{1,3}){3}(?::\d{2,5})?\b`)
-	reVersion  = regexp.MustCompile(`\bv?\d+(?:\.\d+){1,}(?:-[A-Za-z0-9.]+)?\b`)
-	reUnit     = regexp.MustCompile(`\b\d[\d,]*(?:\.\d+)?\s?(?:%|ms|us|µs|ns|s|secs?|mins?|h|hrs?|d|days?|weeks?|bytes?|[kKMGT]i?B|[kKMGT]?bps|[kKMGT]?Hz|x|px|rem|em|k|M|B)\b`)
-	rePort     = regexp.MustCompile(`(?i)\bport\s+\d{2,5}\b|\b[a-z][a-z0-9.-]*:\d{2,5}\b`) // "port 80" and "host:8080"; a time such as 09:20 is not a port
-	reHost     = regexp.MustCompile(`(?i)\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,24}\b`)
-	reIdent    = regexp.MustCompile(`\b[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]+\b|\b[a-z]+[A-Z][A-Za-z0-9]*\b`)
-	reBacktick = regexp.MustCompile("`([^`\n]{1,300})`")
-	reQuoted   = regexp.MustCompile(`(?:^|[\s(\[{:,=*])"([^"\s](?:[^"\n]{0,298}[^"\s])?)"`)                      // an opening quote follows a space, bracket or *; a closing quote follows text
-	reSingle   = regexp.MustCompile(`(?:^|[\s(\[{:,=*])'([^'\s](?:[^'\n]{0,198}[^'\s])?)'(?:$|[\s)\]},;:.!?*])`) // 'draft' in SQL or prose; an apostrophe inside a word is not a quote
-	reDate     = regexp.MustCompile(`\b\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2})?)?\b`)
-	reNumber   = regexp.MustCompile(`\b\d+(?:[.,]\d+)*\b`) // every number, counts included ("10 notes", "3 attempts")
-	reListMark = regexp.MustCompile(`(?m)^\s*\d+[.)]\s`)   // "1. " at the start of a line numbers a list; it is not a value
-	reHex      = regexp.MustCompile(`\b[0-9a-f]{7,40}\b`)  // commit hashes and short ids; kept only when digits and letters both occur
+	spaces     = regexp.MustCompile(`\s+`)
+	h2         = regexp.MustCompile(`(?m)^## .*$`)
+	fenceRe    = regexp.MustCompile("(?m)^\\s*```")
+	reNumber   = regexp.MustCompile(`\d+(?:[.,]\d+)*`)
+	reListMark = regexp.MustCompile(`(?m)^\s*\d+[.)]\s`) // "1. " at the start of a line numbers a list; it is not a value
 	reCite     = regexp.MustCompile(`\[\[[^\]]*\]\]`)
-	reBullet   = regexp.MustCompile(`(?m)^\s*(?:[-*+]|\d+[.)])\s+`) // list markers are layout, not words
+	bulletLine = regexp.MustCompile(`^\s*(?:[-*+]|\d+[.)])\s`)
 )
 
-// body is a section without its citations, whose length counts as content nowhere.
+// body is a section without its citations.
 func body(s string) string { return reCite.ReplaceAllString(s, "") }
 
-// flat collapses every run of white space to one space, so a rewrapped line still contains the same value.
 func flat(s string) string { return strings.TrimSpace(spaces.ReplaceAllString(s, " ")) }
 
-// has reports whether v occurs in text as a whole value: not inside a longer number, name, address or path. "port 80"
-// is not found in "port 8080", and an address is not found inside a longer address that starts with it. Both sides are compared with white space
-// collapsed, so a value that was rewrapped over a line break is still found.
-func has(text, v string) bool { return hasFlat(flat(text), flat(v)) }
-
-// hasFlat is has for text and value whose white space is already collapsed.
-func hasFlat(text, v string) bool {
-	if v == "" {
-		return true
-	}
-	isWord := func(r byte) bool {
-		return r == '_' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z'
-	}
-	for from := 0; from <= len(text)-len(v); {
-		i := strings.Index(text[from:], v)
-		if i < 0 {
-			return false
-		}
-		i += from
-		end := i + len(v)
-		okBefore := i == 0 || !(isWord(text[i-1]) && isWord(v[0]))
-		if v[0] == '/' && i > 0 && (isWord(text[i-1]) || text[i-1] == '/' || text[i-1] == '~' || text[i-1] == '.') {
-			okBefore = false // /data/backups is not inside /mnt/data/backups
-		}
-		okAfter := end == len(text) || !(isWord(text[end]) && isWord(v[len(v)-1]))
-		if okAfter && strings.Contains(v, "/") && end+1 < len(text) && text[end] == '/' && (isWord(text[end+1]) || text[end+1] == '.' || text[end+1] == '~' || text[end+1] == '-') {
-			okAfter = false // /srv/app is not /srv/app/current
-		}
-		lastWord := isWord(v[len(v)-1])
-		if okAfter && lastWord && end+1 < len(text) && text[end] == '.' && text[end+1] >= '0' && text[end+1] <= '9' {
-			okAfter = false // an address followed by a dot and a digit is a longer value
-		}
-		if okAfter && lastWord && end+1 < len(text) && text[end] == '-' && text[end+1] >= '0' && text[end+1] <= '9' {
-			okAfter = false // a hyphen before a digit joins numbers: 80-5 is not 80
-		}
-		if okBefore && okAfter {
-			return true
-		}
-		from = i + 1
-	}
-	return false
-}
-
-// norm lowercases, drops list markers and turns every character that is not a letter or digit into a space, so that a
-// list written as a paragraph (";" between the items) still contains the same run of words.
+// norm lowercases and drops punctuation and list markers, so a list written as a paragraph keeps its word runs.
 func norm(s string) string {
-	s = strings.ToLower(reBullet.ReplaceAllString(s, ""))
-	s = strings.Map(func(r rune) rune {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) {
-			return r
+	s = strings.ToLower(reListMark.ReplaceAllString(s, ""))
+	var b strings.Builder
+	for _, r := range s {
+		if r == '_' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r > 127 {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte(' ')
 		}
-		return ' '
-	}, s)
-	return strings.TrimSpace(spaces.ReplaceAllString(s, " "))
+	}
+	return flat(b.String())
 }
 
-// value is one hard value of a text; Tick marks a value that was written in backticks (code formatting may be dropped
-// by a rewrite, so such a value is also accepted as a plain whole word).
-type value struct {
-	V    string
-	Tick bool
-}
-
-// quoteFix turns typographic quotes into plain ones, so a rewrite that changes the quote style keeps its values.
-var quoteFix = strings.NewReplacer("\u201c", `"`, "\u201d", `"`, "\u201e", `"`, "\u2018", "'", "\u2019", "'")
-
-func extract(text string) []value {
+// numbers lists the numbers of a text, whole ("80" is not found in "8080"), without list numbers.
+func numbers(text string) []string {
 	seen := map[string]bool{}
-	var out []value
-	add := func(v string, tick bool) {
-		v = strings.TrimLeft(strings.TrimRight(strings.TrimSpace(v), ".,;:!?"), ",;:!?") // a leading dot stays: ../a and ./a differ
-		if len(v) < 1 || seen[v] || !strings.ContainsFunc(v, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }) {
-			return // empty, repeated, or only punctuation ("[]", "{}"): not a value
-		}
-		seen[v] = true
-		out = append(out, value{v, tick})
-	}
-	text = quoteFix.Replace(text)
-	text = strings.ReplaceAll(text, "[[", " ")
-	text = stripListMarks(text)
-	orig := text
-	for _, m := range reURL.FindAllString(text, -1) {
-		add(m, false)
-	}
-	text = reURL.ReplaceAllString(text, " ") // the parts of a URL are not values of their own
-	// longest structure first; each match is blanked, so a value is taken once, whole ("~/a/2026-11-03.json" is a
-	// path, not also a date and a host)
-	for _, re := range []*regexp.Regexp{rePath, reDate, reIP, rePort, reUnit, reVersion, reHost, reIdent} {
-		text = re.ReplaceAllStringFunc(text, func(m string) string {
-			add(m, false)
-			return strings.Repeat(" ", len(m))
-		})
-	}
-	for _, m := range reNumber.FindAllString(text, -1) {
-		add(m, false)
-	}
-	// what is left, word by word: anything that holds a digit, an @, a backslash, a colon or an underscore, an option
-	// like -x or --force, or a name in capitals, is a value as a whole token ("p95", "gemma4:12b", "D:\\", "-1")
-	for _, f := range strings.Fields(reURL.ReplaceAllString(orig, " ")) { // whole tokens of the text as written, so "explicit_only=True" and "48px–96px" are values too
-		t := strings.Trim(f, "()[]{}<>\"'`.,;!?*|:")
-		if t == "" || !strings.ContainsFunc(t, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }) {
-			continue
-		}
-		switch {
-		case strings.ContainsAny(t, "0123456789@\\:_"):
-			add(t, false)
-		case t[0] == '-' && len(t) > 1:
-			add(t, false)
-		case len(t) >= 5 && strings.Trim(t, "ABCDEFGHIJKLMNOPQRSTUVWXYZ") == "":
-			add(t, false)
-		}
-	}
-	for _, m := range reHex.FindAllString(orig, -1) {
-		if strings.ContainsAny(m, "0123456789") && strings.ContainsAny(m, "abcdef") {
-			add(m, false)
-		}
-	}
-	for _, m := range reBacktick.FindAllStringSubmatch(orig, -1) {
-		add(m[1], true)
-	}
-	for _, m := range reQuoted.FindAllStringSubmatch(orig, -1) {
-		add(`"`+m[1]+`"`, false) // the quotes are part of the value: "noindex" is not "noindex, nofollow"
-	}
-	for _, m := range reSingle.FindAllStringSubmatch(orig, -1) {
-		add("'"+m[1]+"'", false)
-	}
-	return out
-}
-
-// HardValues lists the values of text that must not be lost, without duplicates, in order of first appearance.
-func HardValues(text string) []string {
 	var out []string
-	for _, v := range extract(text) {
-		out = append(out, v.V)
+	for _, n := range reNumber.FindAllString(reListMark.ReplaceAllString(reCite.ReplaceAllString(text, ""), ""), -1) {
+		if !seen[n] {
+			seen[n] = true
+			out = append(out, n)
+		}
 	}
 	return out
 }
 
-// holder answers "does this text contain the value as a whole value?": the text is read with the same extraction that
-// found the value, so the two always agree on where a value starts and ends ("/data/backups" is not a value of a text
-// that only has "/mnt/data/backups").
-type holder struct {
-	flatText string
-	set      map[string]bool
-}
-
-func newHolder(text string) holder {
-	text = quoteFix.Replace(text)
-	// list markers are layout: "2." at the start of a line is dropped before the lines are joined, or it would
-	// become a value of the new text and hide a changed "2"
-	h := holder{flatText: flat(stripListMarks(text)), set: map[string]bool{}}
-	// read as written, and with white space collapsed: a value rewrapped over a line break is still one value
-	for _, src := range []string{text, h.flatText} {
-		for _, v := range extract(src) {
-			h.set[v.V] = true
+// missingNumbers lists the numbers of old that new does not hold.
+func missingNumbers(old, new string) []string {
+	have := map[string]bool{}
+	for _, n := range reNumber.FindAllString(new, -1) {
+		have[n] = true
+	}
+	var out []string
+	for _, n := range numbers(old) {
+		if !have[n] {
+			out = append(out, n)
 		}
 	}
-	return h
-}
-
-func (h holder) has(v value) bool {
-	if h.set[v.V] {
-		return true
-	}
-	return v.Tick && hasFlat(h.flatText, v.V)
+	return out
 }
 
 // Note is one source note of a merge.
 type Note struct{ ID, Text string }
 
 // CheckAppend checks a section written from notes. Every note must survive in it (some verbatim run of Window words,
-// or the whole note when it is shorter than that), the section, without its citations, must be 0.60 to 1.60 times the notes'
-// combined length,
-// and every hard value of a note must appear in a line that cites the note's id.
+// or the whole note when it is shorter than that), the section, without its citations, must be 0.60 to 1.60 times the
+// notes' combined length, and every number of a note must appear in a list item or paragraph that cites the note's id.
+// Pass bare note ids: the first eight characters are what is matched.
 func CheckAppend(notes []Note, section string) (ok bool, problems []string) {
 	total := 0
 	for _, n := range notes {
@@ -261,24 +121,24 @@ func CheckAppend(notes []Note, section string) (ok bool, problems []string) {
 			problems = append(problems, fmt.Sprintf("note %s does not survive in the section (no verbatim run of %d words, or not whole when shorter)", short(n.ID), Window))
 		}
 		var cited []string
-		for _, l := range units {
-			if strings.Contains(l, n.ID) || (len(n.ID) >= 8 && strings.Contains(l, n.ID[:8])) {
-				cited = append(cited, l)
+		for _, u := range units {
+			if strings.Contains(u, n.ID) || (len(n.ID) >= 8 && strings.Contains(u, n.ID[:8])) {
+				cited = append(cited, u)
 			}
 		}
 		if len(cited) == 0 {
 			problems = append(problems, fmt.Sprintf("no list item or paragraph cites note %s", short(n.ID)))
 			continue
 		}
-		for _, v := range missing(n.Text, strings.Join(cited, "\n")) {
-			problems = append(problems, fmt.Sprintf("note %s: value %q is missing from the item that cites it", short(n.ID), v))
+		for _, v := range missingNumbers(n.Text, strings.Join(cited, "\n")) {
+			problems = append(problems, fmt.Sprintf("note %s: number %q is missing from the item that cites it", short(n.ID), v))
 		}
 	}
 	return len(problems) == 0, problems
 }
 
 // CheckReplace checks new text for an entry against the text it replaces: no heading lost, code fences balanced and
-// unchanged in number, length within bounds, and every hard value of the old text still present.
+// unchanged in number, length within bounds, and every number of the old text still present.
 func CheckReplace(original, replacement string) (ok bool, problems []string) {
 	have := map[string]bool{}
 	for _, h := range h2.FindAllString(replacement, -1) {
@@ -297,19 +157,16 @@ func CheckReplace(original, replacement string) (ok bool, problems []string) {
 	if fo != fn || fn%2 != 0 {
 		problems = append(problems, fmt.Sprintf("fence count %d->%d (changed or odd)", fo, fn))
 	}
-	for _, v := range missing(original, replacement) {
-		problems = append(problems, fmt.Sprintf("value %q is missing from the new text", v))
+	for _, v := range missingNumbers(original, replacement) {
+		problems = append(problems, fmt.Sprintf("number %q is missing from the new text", v))
 	}
 	return len(problems) == 0, problems
 }
 
-var bulletStart = regexp.MustCompile(`^\s*(?:[-*+]|\d+[.)])\s`)
-
-// blocks splits a section into list items and paragraphs: a block starts at a bullet or after a blank line and runs
-// until the next one, so a bullet that wraps over several lines is one unit.
+// blocks splits a section into list items and paragraphs; a wrapped line belongs to its item, and an indented
+// source line ("source [[id]]") belongs to the item above it.
 func blocks(section string) []string {
-	var out []string
-	var cur []string
+	var out, cur []string
 	flush := func() {
 		if len(cur) > 0 {
 			out = append(out, strings.Join(cur, "\n"))
@@ -321,8 +178,10 @@ func blocks(section string) []string {
 			flush()
 			continue
 		}
-		if bulletStart.MatchString(l) && !(len(cur) > 0 && indentOf(l) > indentOf(cur[0]) && len(strings.Fields(body(l))) <= 3) {
-			flush() // a more indented bullet that is only a source line ("source [[id]]") belongs to the item above it; one with text of its own is its own item
+		indent := len(l) - len(strings.TrimLeft(l, " \t"))
+		subSource := len(cur) > 0 && indent > len(cur[0])-len(strings.TrimLeft(cur[0], " \t")) && len(strings.Fields(body(l))) <= 3
+		if bulletLine.MatchString(l) && !subSource {
+			flush()
 		}
 		cur = append(cur, l)
 	}
@@ -338,72 +197,4 @@ func short(id string) string {
 		return id[:8]
 	}
 	return id
-}
-
-// splitFences separates the text outside code fences from the text inside them.
-func splitFences(text string) (prose, code string) {
-	var p, c []string
-	in := false
-	for _, l := range strings.Split(text, "\n") {
-		if strings.HasPrefix(strings.TrimSpace(l), "```") {
-			in = !in
-			continue
-		}
-		if in {
-			c = append(c, l)
-		} else {
-			p = append(p, l)
-		}
-	}
-	return strings.Join(p, "\n"), strings.Join(c, "\n")
-}
-
-// missing lists the values of old that new does not hold. A value written in prose must be in the prose of new (a
-// copy of it inside a code fence does not stand for it); a value written in a code fence may be anywhere in new.
-func missing(old, new string) []string {
-	op, oc := splitFences(old)
-	np, _ := splitFences(new)
-	whole, prose := newHolder(new), newHolder(np)
-	var out []string
-	for _, v := range extract(op) {
-		if !prose.has(v) {
-			out = append(out, v.V)
-		}
-	}
-	for _, v := range extract(oc) {
-		if !whole.has(v) {
-			out = append(out, v.V)
-		}
-	}
-	return out
-}
-
-func indentOf(l string) int {
-	return len(l) - len(strings.TrimLeft(l, " \t"))
-}
-
-var listLine = regexp.MustCompile(`^(\s*)(\d+)[.)]\s`)
-
-// stripListMarks removes the numbers of a numbered list ("1. ", "2. ", ...). A number at the start of a line is a
-// list number only when it is 1, or follows the previous item by one; any other ("7. days" after a wrapped line) is
-// part of the text and stays, so changing it is seen.
-func stripListMarks(text string) string {
-	lines := strings.Split(text, "\n")
-	last := 0
-	for i, l := range lines {
-		if m := listLine.FindStringSubmatch(l); m != nil {
-			n, _ := strconv.Atoi(m[2])
-			if n == 1 || (last > 0 && n == last+1) {
-				lines[i] = m[1] + l[len(m[0]):]
-				last = n
-				continue
-			}
-			last = 0
-			continue
-		}
-		if strings.TrimSpace(l) != "" && indentOf(l) == 0 {
-			last = 0 // plain text ends a list; indented lines belong to the item above
-		}
-	}
-	return strings.Join(lines, "\n")
 }

@@ -12,7 +12,7 @@ It speaks MCP over HTTP on the loopback interface, so any agent harness can use 
 | Problem | What the design does about it | Built |
 |---|---|---|
 | **Retrieval.** An agent finds only what it was told in the current chat. | Keyword search over the memory repository, the project's source code and its wiki; optional vector search. Every hit carries its path and section, notes carry a short id. | keyword: yes; vectors: yes, off by default |
-| **Curation.** Notes pile up; merging them by hand does not happen. | Notes are merged into wiki entries automatically, and a check that does not use a model refuses any merge that loses a number, a path or a name. | the check: yes; the merging: not yet |
+| **Curation.** Notes pile up; merging them by hand does not happen. | Notes are merged into wiki entries automatically, and a check that does not use a model refuses a merge that drops a note, a heading or a number. | the check: yes; the merging: not yet |
 | **Autosave.** Learnings are lost when a session ends. | The harness saves a note at the end of a session. | not yet |
 | **Auto-inject.** The agent has to remember to ask. | A hook in the harness puts relevant hits into the first prompt. | not yet |
 | **Sharing across machines.** Memory on one machine is invisible on another. | The record is a git repository; the index is derived on each machine. Only one machine curates. | git-based record: yes; sync and the one-curator rule: not yet |
@@ -55,9 +55,10 @@ the original ranking. Here the files are the record and the index is disposable.
 
 `hms init`, `rescan`, `recall`, `embed`, `stats`, `hash`, `digests`, `bench`, `serve`. Seven MCP tools: `recall`,
 `learn`, `wiki_read`, `fact_add`, `retire`, `feedback`, `stats`. Tools list size: about 840 tokens.
-Staging cap of 50 active notes per project (the oldest are archived, never deleted). Integrity gate for merges
-(`internal/gate`): every hard value of a note must survive; 20 test fixtures, 0 wrong rejections, 0 missed value
-changes, and one miss that is expected by design (a single changed word that is not a value).
+Staging cap of 50 active notes per project (the oldest are archived, never deleted). Check for merges
+(`internal/gate`), a port of the earlier service's check: no heading lost, length in bounds, each note keeps a verbatim
+eight-word run, code fences balanced, and every number of a note is still in the item that cites it. It does not
+judge meaning; curation only appends and keeps the notes, so a bad merge is recoverable from git.
 
 ## Not built yet
 
