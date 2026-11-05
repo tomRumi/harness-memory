@@ -174,7 +174,7 @@ func Submit(ctx context.Context, st *store.Store, sub Submission) (Report, error
 			switch {
 			case wiki.ValidTitle(p.Title) != nil:
 				j.state, j.problem = Refused, []string{wiki.ValidTitle(p.Title).Error()}
-			case strings.EqualFold(p.Title, UnsortedTitle):
+			case wiki.Fold(p.Title) == wiki.Fold(UnsortedTitle):
 				j.state, j.problem = Refused, []string{`the title "Unsorted" belongs to the service`}
 			case titles[wiki.Fold(p.Title)]:
 				j.state, j.problem = Refused, []string{"two pages of this submission have the same title"}

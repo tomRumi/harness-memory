@@ -204,7 +204,7 @@ func pageFiles(repo, project string) ([]PageRef, error) {
 			return nil
 		}
 		title := strings.TrimSuffix(name, ".md")
-		if strings.EqualFold(title, wiki.IndexTitle) {
+		if wiki.Fold(title) == wiki.Fold(wiki.IndexTitle) {
 			return nil
 		}
 		rel, _ := filepath.Rel(repo, p)
@@ -417,7 +417,7 @@ func relatedPages(ctx context.Context, st *store.Store, project, query string) [
 		}
 		seen[h.NodeID] = true
 		title := strings.TrimSuffix(filepath.Base(h.Path), ".md")
-		if strings.EqualFold(title, wiki.IndexTitle) || strings.EqualFold(title, UnsortedTitle) {
+		if wiki.Fold(title) == wiki.Fold(wiki.IndexTitle) || wiki.Fold(title) == wiki.Fold(UnsortedTitle) {
 			continue
 		}
 		if r, ok := readRelated(st.Repo, h.Path); ok {

@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode"
 
+	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
 
 	"github.com/tomRumi/harness-memory-service/internal/md"
@@ -24,9 +25,10 @@ const MaxTitle = 100
 // MaxTitleBytes is the longest title, in bytes of UTF-8 (file names are limited in bytes, not characters).
 const MaxTitleBytes = 200
 
-// Fold is the form in which titles and link targets are compared: Unicode NFC, lower case. A file system may store
-// "Café" as one character or as two (macOS does), and both are the same page.
-func Fold(s string) string { return strings.ToLower(norm.NFC.String(s)) }
+// Fold is the form in which titles and link targets are compared: Unicode NFC, then full Unicode case folding. The
+// file system of a Mac and Obsidian treat "Café" written in one piece or two, "Ports" and "ports", "Strasse" and
+// "Straße", "ΟΔΟΣ" and "οδος", "file" and "ﬁle" as one name. Titles are compared with this function everywhere.
+func Fold(s string) string { return norm.NFC.String(cases.Fold().String(norm.NFC.String(s))) }
 
 // badChars cannot be in a title: they break links ([[A|B]], [[A#B]], [[A^B]]), paths, or are rejected as file
 // names by Obsidian or by common file systems.
@@ -46,7 +48,7 @@ func ValidTitle(title string) error {
 		return fmt.Errorf("page title %q has a space at the start or the end", title)
 	case strings.HasPrefix(title, "."):
 		return fmt.Errorf("page title %q starts with a dot", title)
-	case strings.EqualFold(title, IndexTitle):
+	case Fold(title) == Fold(IndexTitle):
 		return fmt.Errorf("page title %q is reserved for the generated index page", title)
 	}
 	for _, r := range title {

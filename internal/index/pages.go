@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/tomRumi/harness-memory-service/internal/wiki"
 )
 
 // Page vectors are CENTRED: the mean of all page vectors is subtracted and the result is normalised again. Pages of one
@@ -46,7 +48,7 @@ type PagePair struct {
 // IsSpecialPage says whether the wiki node id is an Index or an Unsorted page: pages that are lists, not subjects.
 func IsSpecialPage(id string) bool {
 	t := pageTitle(id)
-	return strings.EqualFold(t, "Index") || strings.EqualFold(t, "Unsorted")
+	return wiki.Fold(t) == wiki.Fold(wiki.IndexTitle) || wiki.Fold(t) == "unsorted"
 }
 
 func pageTitle(id string) string { return id[strings.LastIndex(id, "/")+1:] }

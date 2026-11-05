@@ -39,3 +39,23 @@ func TestSourcesThatYAMLReadsAsMapsAreShownAsText(t *testing.T) {
 		t.Fatalf("sources %q", got)
 	}
 }
+
+// Fold is what the file system of a Mac does with names: NFC and full case folding.
+func TestFoldIsFullCaseFoldingOfNFC(t *testing.T) {
+	for _, c := range [][2]string{
+		{"Strasse", "Straße"}, {"ΟΔΟΣ", "οδος"}, {"ΟΔΟΣ", "οδοσ"}, {"file", "ﬁle"}, {"µ", "μ"}, {"ſ", "s"},
+		{"Café", "Cafe\u0301"}, {"CAFÉ", "cafe\u0301"}, {"Ports", "PORTS"},
+	} {
+		if Fold(c[0]) != Fold(c[1]) {
+			t.Errorf("Fold(%q) != Fold(%q)", c[0], c[1])
+		}
+	}
+	for _, c := range [][2]string{{"Cafe", "Café"}, {"Ports", "Port"}, {"a b", "ab"}} {
+		if Fold(c[0]) == Fold(c[1]) {
+			t.Errorf("Fold(%q) == Fold(%q)", c[0], c[1])
+		}
+	}
+	if ValidTitle("INDEX") == nil || ValidTitle("ınDEX") == nil && Fold("ınDEX") == Fold("INDEX") {
+		t.Error("Index is reserved in every folded spelling")
+	}
+}
