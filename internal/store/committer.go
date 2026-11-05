@@ -231,6 +231,9 @@ func (c *Committer) commit(snap []string, msg string) (err error) {
 		if out, err := c.git(append([]string{"--literal-pathspecs", "add", "-A", "--"}, add...)...); err != nil {
 			return fmt.Errorf("git add: %v: %s", err, out)
 		}
+		if err := c.checkStaged(add); err != nil {
+			return err
+		}
 	}
 	staged, err := c.git("diff", "--cached", "--name-only", "-z") // -z: a path with accents is not shown quoted
 	if err != nil {
@@ -252,6 +255,26 @@ func (c *Committer) commit(snap []string, msg string) (err error) {
 	c.mu.Lock()
 	c.commits++
 	c.mu.Unlock()
+	return nil
+}
+
+// checkStaged closes the class "git silently did not take a file" (a folder whose name differs only by case on a
+// case-insensitive file system, for one): after git add -A every path named must have no change left outside the index.
+func (c *Committer) checkStaged(paths []string) error {
+	// the two halves of `git status --porcelain`: tracked files changed against the index (" M", " D") and untracked
+	// ones ("??"). (git status itself would lose its leading space to the trimmed output of c.git.)
+	for _, args := range [][]string{
+		{"diff", "--name-only", "-z", "--"},
+		{"ls-files", "-z", "--others", "--exclude-standard", "--"},
+	} {
+		out, err := c.git(append(append([]string{"--literal-pathspecs"}, args...), paths...)...)
+		if err != nil {
+			return fmt.Errorf("git %s: %v: %s", args[0], err, out)
+		}
+		if f := strings.SplitN(out, "\x00", 2)[0]; f != "" {
+			return fmt.Errorf("git did not stage %s (a folder whose name differs only by case? run hms doctor)", f)
+		}
+	}
 	return nil
 }
 
