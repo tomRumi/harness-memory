@@ -354,8 +354,6 @@ func main() {
 			cancel()
 		}
 		com := store.NewCommitter(p.repo, 3*time.Second)
-		store.CleanTemp(p.repo)
-		com.Sweep() // notes left uncommitted by a crash or an earlier failure
 		var e index.Embedder
 		if emb != nil {
 			e = emb
@@ -365,6 +363,7 @@ func main() {
 			die("serve: %v", err)
 		}
 		defer st.Close()
+		sweepLeftovers(st, os.Stderr) // notes left uncommitted or staged by a crash or an earlier failure
 		srv, err := server.New(st, d, e)
 		if err != nil {
 			die("serve: %v", err)
@@ -446,7 +445,7 @@ func main() {
 
 // wikiCmd runs `hms wiki links` and `hms wiki index`. It makes the index match the files first, so that it reports
 // what is on disk now. It returns the exit status.
-func wikiCmd(p paths, args []string, stdout, stderr io.Writer) int {
+func wikiCmd(p paths, args []string, stdout, stderr io.Writer) (code int) {
 	if len(args) > 0 && (args[0] == "related" || args[0] == "duplicates" || args[0] == "eval-pairs") {
 		return wikiPagesCmd(p, args, stdout, stderr)
 	}
@@ -509,13 +508,13 @@ func wikiCmd(p paths, args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	com := store.NewCommitter(p.repo, 3*time.Second)
-	sweepLeftovers(p.repo, com)
 	st, err := store.New(p.repo, d, nil, com, filepath.Join(p.home, "events.db"))
 	if err != nil {
 		fmt.Fprintf(stderr, "hms: %v\n", err)
 		return 1
 	}
-	defer st.Close() // makes the commit
+	defer closeStore(st, com, stderr, &code) // makes the commit and says so when it fails
+	sweepLeftovers(st, stderr)
 	status := 0
 	for _, pr := range projects {
 		rel := "wiki/" + pr + "/Index.md"
@@ -536,7 +535,7 @@ func wikiCmd(p paths, args []string, stdout, stderr io.Writer) int {
 }
 
 // curateCmd runs `hms curate`. It returns the exit status.
-func curateCmd(p paths, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+func curateCmd(p paths, args []string, stdin io.Reader, stdout, stderr io.Writer) (code int) {
 	fs := flag.NewFlagSet("curate", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	pending := fs.Bool("pending", false, "print the batches to merge as JSON")
@@ -633,15 +632,15 @@ func curateCmd(p paths, args []string, stdin io.Reader, stdout, stderr io.Writer
 		e = embed.New(embed.Default())
 	}
 	com := store.NewCommitter(p.repo, 3*time.Second)
-	if *submit != "" || *apply {
-		sweepLeftovers(p.repo, com)
-	}
 	st, err := store.New(p.repo, d, e, com, filepath.Join(p.home, "events.db"))
 	if err != nil {
 		fmt.Fprintf(stderr, "hms: %v\n", err)
 		return 1
 	}
-	defer st.Close() // makes the commit
+	defer closeStore(st, com, stderr, &code) // makes the commit and says so when it fails
+	if *submit != "" || *apply {
+		sweepLeftovers(st, stderr)
+	}
 	ctx := context.Background()
 	switch {
 	case *pending:
@@ -784,10 +783,22 @@ func recallContext(p paths, proj string, hook bool, query string, vectors bool, 
 	return 0
 }
 
-// sweepLeftovers commits the notes and pages that an earlier run left uncommitted (it was killed between writing and
-// committing). Every command that writes does it first, so the files never wait for a serve to be started.
-func sweepLeftovers(repo string, com *store.Committer) {
-	store.CleanTemp(repo)
-	com.Sweep()
-	com.Flush()
+// sweepLeftovers commits the notes and pages that an earlier run left uncommitted or staged (it was killed between
+// writing and committing). Every command that writes does it first, so the files never wait for a serve to be started.
+// It holds the write lock (see Store.Sweep).
+func sweepLeftovers(st *store.Store, stderr io.Writer) {
+	store.CleanTemp(st.Repo)
+	if err := st.Sweep(); err != nil {
+		fmt.Fprintf(stderr, "hms: sweep: %v\n", err)
+	}
+}
+
+// closeStore makes the last commit. When it failed, the files are saved but not committed: say so and make the exit
+// status 1, so a script or a harness does not go on as if the commit had been made.
+func closeStore(st *store.Store, com *store.Committer, stderr io.Writer, code *int) {
+	st.Close()
+	if err := com.LastErr(); err != nil {
+		fmt.Fprintln(stderr, "hms:", curate.CommitFailed(err))
+		*code = 1
+	}
 }

@@ -259,3 +259,36 @@ func TestRecipeAndDocumentsAfterTheSecondReview(t *testing.T) {
 		}
 	}
 }
+
+// Third review: a commit that fails is said so (stderr, the report) and the exit status is 1; the files stay saved.
+func TestFailedCommitIsReportedByEveryWritingCommand(t *testing.T) {
+	home, repo, ids := curateFixture(t)
+	hook := filepath.Join(repo, ".git", "hooks", "pre-commit")
+	os.MkdirAll(filepath.Dir(hook), 0o755)
+	os.WriteFile(hook, []byte("#!/bin/sh\necho refused by the test hook\nexit 1\n"), 0o755)
+	file := filepath.Join(t.TempDir(), "answer.json")
+	os.WriteFile(file, []byte(submission(ids)), 0o644)
+	out, errOut, c := hms(t, home, deadURL(), noModel, "", "curate", "-submit", file)
+	if c != 1 || !strings.Contains(errOut, "committed: NO") || !strings.Contains(errOut, "hms doctor") || !strings.Contains(out, "committed: NO") {
+		t.Fatalf("submit: exit %d\nstdout: %s\nstderr: %s", c, out, errOut)
+	}
+	if s := strings.TrimSpace(gitIn(t, repo, "diff", "--cached", "--name-only")); s != "" {
+		t.Errorf("left staged: %q", s)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "wiki", "proj", "Ops.md")); err != nil {
+		t.Errorf("the files are not saved: %v", err)
+	}
+	// wiki index: the same rule
+	_, errOut, c = hms(t, home, deadURL(), []string{"HMS_VECTORS=0"}, "", "wiki", "index", "-p", "other")
+	if c != 1 || !strings.Contains(errOut, "committed: NO") {
+		t.Errorf("wiki index: exit %d: %s", c, errOut)
+	}
+	// the hook is fixed: the next writing command commits everything that was left
+	os.Remove(hook)
+	if _, errOut, c = hms(t, home, deadURL(), []string{"HMS_VECTORS=0"}, "", "wiki", "index", "-p", "other"); c != 0 {
+		t.Fatalf("after the fix: exit %d: %s", c, errOut)
+	}
+	if s := strings.TrimSpace(gitIn(t, repo, "status", "--porcelain", "-uall")); s != "" {
+		t.Errorf("left loose after the fix: %q", s)
+	}
+}

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -108,11 +109,16 @@ func (c *Committer) busyLocked() bool {
 // GitTimeout bounds every git call. A hung hook or a signing prompt must not hold up the service.
 const GitTimeout = 30 * time.Second
 
-func (c *Committer) git(args ...string) (string, error) {
+func (c *Committer) git(args ...string) (string, error) { return Git(c.repo, args...) }
+
+// Git runs git in repo with the GitTimeout and returns its combined output, trimmed. It is the only way this program
+// runs git (the committer, hms init), so a hung hook or a signing program that waits fails the same way everywhere.
+func Git(repo string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), GitTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", c.repo}, args...)...)
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", repo}, args...)...)
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_EDITOR=true")
+	cmd.WaitDelay = time.Second // a child that keeps the pipe open (a hook's subprocess) must not hold us past the timeout
 	out, err := cmd.CombinedOutput()
 	if ctx.Err() != nil {
 		return strings.TrimSpace(string(out)), fmt.Errorf("git %s: timed out after %s", args[0], GitTimeout)
@@ -147,13 +153,10 @@ func (c *Committer) Flush() {
 	c.mu.Unlock()
 	detached := c.Detached() // runs git: the state lock is not held
 	c.mu.Lock()
-	if detached {
-		c.armLocked(c.quiet) // the owner may check out a branch again; the files stay
-		c.mu.Unlock()
-		return
-	}
-	if c.busyLocked() {
-		c.armLocked(c.quiet) // wait the merge or rebase out; the files stay
+	if detached || c.busyLocked() {
+		// the owner may check out a branch or finish the merge or rebase; the files stay. It is said, not silent.
+		c.lastErr = errors.New("not committing: HEAD is detached, or a merge or rebase is in progress")
+		c.armLocked(c.quiet)
 		c.mu.Unlock()
 		return
 	}
@@ -202,7 +205,12 @@ func joinMessages(msgs []string) string {
 
 // commit stages the given paths and commits them. A tracked path that no longer exists is staged as a deletion. Only
 // notes, facts and wiki entries are ever named. It returns nil when there was nothing to commit.
-func (c *Committer) commit(snap []string, msg string) error {
+func (c *Committer) commit(snap []string, msg string) (err error) {
+	defer func() {
+		if err != nil {
+			c.unstage() // one rule: a failed round never leaves a half set staged for a later commit to carry
+		}
+	}()
 	var add, gone []string
 	for _, p := range snap {
 		if !strings.HasPrefix(p, "notes/") && !strings.HasPrefix(p, "facts/") && !strings.HasPrefix(p, "wiki/") {
@@ -256,6 +264,24 @@ func (c *Committer) commit(snap []string, msg string) error {
 	return nil
 }
 
+// unstage takes everything under notes, facts and wiki out of the index again (the files stay as they are on disk). A
+// commit that fails after some paths were staged would otherwise leave, say, a note deletion staged without the page it
+// moved into, and the next commit by anyone would carry the deletion alone. Paths outside those folders are the owner's
+// and are never touched.
+func (c *Committer) unstage() {
+	c.git("--literal-pathspecs", "reset", "-q", "--", "notes", "facts", "wiki")
+}
+
+// Ignored reports whether git ignores rel (by .gitignore, .git/info/exclude or the global ignore file). git add
+// refuses such a path, so nothing may be written there as part of a set that is committed together.
+func (c *Committer) Ignored(rel string) bool {
+	if c.off {
+		return false
+	}
+	_, err := c.git("check-ignore", "-q", "--", rel)
+	return err == nil
+}
+
 // Sweep notes the notes, facts and wiki pages that are on disk but not committed (for example after a crash) so that
 // they are committed too. Temporary files of an interrupted write are skipped. The whole leftover set goes into one
 // commit or none: when git cannot list it, nothing is noted, and when a file of it cannot be added, commit stops
@@ -264,15 +290,21 @@ func (c *Committer) Sweep() {
 	if c.off {
 		return
 	}
-	// -z: git does not quote a path with accents or other non-ASCII characters
-	out, err := exec.Command("git", "-C", c.repo, "ls-files", "-z", "--others", "--modified", "--exclude-standard", "--", "notes", "facts", "wiki").Output()
-	if err != nil {
-		return
-	}
+	// -z: git does not quote a path with accents or other non-ASCII characters. Two lists: what differs from the index
+	// (new, changed, deleted) and what is staged already (a kill during git commit leaves that behind).
 	var rels []string
-	for _, f := range strings.Split(string(out), "\x00") {
-		if f != "" && strings.HasSuffix(f, ".md") && !strings.HasPrefix(filepath.Base(f), ".") {
-			rels = append(rels, f)
+	for _, args := range [][]string{
+		{"ls-files", "-z", "--others", "--modified", "--exclude-standard", "--", "notes", "facts", "wiki"},
+		{"diff", "--cached", "--name-only", "-z", "--", "notes", "facts", "wiki"},
+	} {
+		out, err := c.git(args...)
+		if err != nil {
+			return // nothing is noted when git cannot list the whole set
+		}
+		for _, f := range strings.Split(out, "\x00") {
+			if f != "" && strings.HasSuffix(f, ".md") && !strings.HasPrefix(filepath.Base(f), ".") {
+				rels = append(rels, f)
+			}
 		}
 	}
 	if len(rels) > 0 {

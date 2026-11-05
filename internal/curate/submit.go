@@ -196,6 +196,8 @@ func Submit(ctx context.Context, st *store.Store, sub Submission) (Report, error
 				// the file system is the final truth for "exists": two names that fold differently in our table can
 				// still be one file for it, and a new page is never written over a file
 				j.state, j.problem = Stale, []string{"a file with this name already exists; give the base_hash of that page to change it"}
+			case !j.exists && tx.Ignored(j.rel):
+				j.state, j.problem = Unsorted, []string{store.ErrIgnored.Error()}
 			case p.BaseHash != "" && !j.exists:
 				j.state, j.problem = Stale, []string{"the page no longer exists"}
 			case p.BaseHash != "" && Hash(j.old) != p.BaseHash:
@@ -347,6 +349,9 @@ func Submit(ctx context.Context, st *store.Store, sub Submission) (Report, error
 	// Commit now, before the slow copy check: a kill from here on leaves the files committed, not loose.
 	if st.Commit != nil {
 		st.Commit.Flush()
+		if err := st.Commit.LastErr(); err != nil {
+			rep.Warnings = append(rep.Warnings, CommitFailed(err))
+		}
 	}
 	var mat *index.Matrix // vectors of the existing pages, loaded for the first new page
 	for _, title := range newPages {
@@ -363,6 +368,13 @@ func pathTaken(repo, rel string) bool {
 	_, err := os.Lstat(filepath.Join(repo, filepath.FromSlash(rel)))
 	return err == nil
 }
+
+// CommitFailed is the sentence every command prints when the files are saved but the commit failed.
+func CommitFailed(err error) string {
+	return fmt.Sprintf("committed: NO (%s); the files are saved, run hms doctor", firstLine(err.Error()))
+}
+
+func firstLine(s string) string { return strings.TrimSpace(strings.SplitN(s, "\n", 2)[0]) }
 
 // composePage builds the file of a passing page. The frontmatter comes from the service: a new page gets title,
 // summary, tags and sources; an existing page keeps its frontmatter byte for byte except summary (when given), tags

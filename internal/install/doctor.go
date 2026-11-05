@@ -12,6 +12,7 @@ import (
 
 	"github.com/tomRumi/harness-memory-service/internal/embed"
 	"github.com/tomRumi/harness-memory-service/internal/index"
+	"github.com/tomRumi/harness-memory-service/internal/store"
 )
 
 // Doctor runs the checks, prints one line each (OK, WARN or FAIL) and changes nothing. It returns the number of FAILs.
@@ -138,27 +139,37 @@ func doctorEmbedder(db *index.DB, line func(level, what, detail string)) {
 	}
 }
 
+func gitFails(repo string, args ...string) bool {
+	_, err := store.Git(repo, args...)
+	return err != nil
+}
+
 // doctorRepoState checks what a running service would also see: no merge or rebase under way and nothing foreign
 // staged. The last commit error of a running service is shown by its stats tool.
 func doctorRepoState(repo string, line func(level, what, detail string)) {
 	g := filepath.Join(repo, ".git")
+	if fi, err := os.Stat(filepath.Join(g, "index.lock")); err == nil {
+		age := time.Since(fi.ModTime()).Round(time.Second)
+		line("WARN", "commits", fmt.Sprintf(".git/index.lock exists (%s old): every commit is blocked until it is removed; if no git program is running, delete that file", age))
+		return
+	}
 	for _, f := range []string{"MERGE_HEAD", "rebase-merge", "rebase-apply", "CHERRY_PICK_HEAD"} {
 		if _, err := os.Stat(filepath.Join(g, f)); err == nil {
 			line("WARN", "commits", "the repository is in the middle of a merge or rebase; commits pause until it is finished")
 			return
 		}
 	}
-	if _, err := os.Stat(g); err == nil && exec.Command("git", "-C", repo, "symbolic-ref", "-q", "HEAD").Run() != nil {
+	if _, err := os.Stat(g); err == nil && gitFails(repo, "symbolic-ref", "-q", "HEAD") {
 		line("WARN", "commits", "HEAD is detached; commits pause until a branch is checked out")
 		return
 	}
-	out, err := exec.Command("git", "-C", repo, "diff", "--cached", "--name-only", "-z").Output()
+	out, err := store.Git(repo, "diff", "--cached", "--name-only", "-z")
 	if err != nil {
 		line("FAIL", "commits", "git diff --cached failed: "+err.Error())
 		return
 	}
 	var foreign []string
-	for _, f := range strings.Split(string(out), "\x00") {
+	for _, f := range strings.Split(out, "\x00") {
 		if f != "" && !strings.HasPrefix(f, "notes/") && !strings.HasPrefix(f, "facts/") && !strings.HasPrefix(f, "wiki/") {
 			foreign = append(foreign, f)
 		}

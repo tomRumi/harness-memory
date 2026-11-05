@@ -90,6 +90,22 @@ func (s *Store) Close() error {
 	return s.ev.Close()
 }
 
+// Sweep commits the notes, facts and pages that an earlier run left uncommitted or staged (see Committer.Sweep). It
+// holds the write lock, so it never commits a multi-file operation of another process half way.
+func (s *Store) Sweep() error {
+	if s.Commit == nil {
+		return nil
+	}
+	unlock, err := s.lockWrite()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	s.Commit.Sweep()
+	s.Commit.Flush()
+	return nil
+}
+
 // Event appends to events.db. Failures are ignored: history must never block a write.
 func (s *Store) Event(kind, node, project, detail string) {
 	s.ev.Exec(`INSERT INTO events(at,kind,node_id,project,detail) VALUES(?,?,?,?,?)`, time.Now().UTC().Format(time.RFC3339), kind, node, project, detail)

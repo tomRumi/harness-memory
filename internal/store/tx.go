@@ -20,6 +20,10 @@ type Tx struct {
 	events  []txEvent // recorded in events.db only when the operation succeeds
 }
 
+// ErrIgnored is returned when a file of a multi-file operation would be ignored by git: it could never be committed
+// together with the others.
+var ErrIgnored = errors.New("the page path is ignored by git")
+
 type txEvent struct{ kind, node, project, detail string }
 
 // undoEntry is a file as it was before the first change of the operation: its bytes, or its absence.
@@ -121,6 +125,9 @@ func (tx *Tx) note(rel string) {
 
 // Write writes rel (a path under the repository) atomically and updates its index entry.
 func (tx *Tx) Write(rel string, data []byte) error {
+	if tx.Ignored(rel) {
+		return fmt.Errorf("%s: %w", rel, ErrIgnored)
+	}
 	if err := tx.remember(rel); err != nil {
 		return err
 	}
@@ -157,6 +164,9 @@ func (tx *Tx) IndexPage(project string) error {
 	}
 	return tx.Write(rel, []byte(content))
 }
+
+// Ignored reports whether git ignores rel, so that a write there could never be committed with the rest.
+func (tx *Tx) Ignored(rel string) bool { return tx.s.Commit != nil && tx.s.Commit.Ignored(rel) }
 
 // Busy reports whether git is in the middle of a merge or a rebase.
 func (tx *Tx) Busy() bool { return tx.s.Commit != nil && tx.s.Commit.Busy() }

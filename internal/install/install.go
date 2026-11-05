@@ -5,6 +5,7 @@ package install
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/tomRumi/harness-memory-service/internal/embed"
 	"github.com/tomRumi/harness-memory-service/internal/index"
+	"github.com/tomRumi/harness-memory-service/internal/store"
 )
 
 // Paths are the three locations of a memory.
@@ -44,10 +46,16 @@ func NoEmbedderLine(cfg embed.Config) string {
 // Init creates the memory repository (with a local git repository), the index and the settings, then checks the
 // embedder. Running it again changes nothing. It returns an error only when the repository or index cannot be made;
 // an embedder that is missing or unwilling is reported and is not an error.
-func Init(p Paths, o InitOptions) error {
-	if err := prepare(p, o.Out); err != nil {
+func Init(p Paths, o InitOptions) (err error) {
+	commitErr, err := prepare(p, o.Out)
+	if err != nil {
 		return err
 	}
+	defer func() { // a failed first commit is reported after the rest of init ran; the files are saved
+		if err == nil {
+			err = commitErr
+		}
+	}()
 	cfg := embed.Default()
 	if !VectorsEnabled() {
 		fmt.Fprintln(o.Out, "vectors: off (HMS_VECTORS=0)")
@@ -112,40 +120,43 @@ func pullOffer(c *embed.Client, cfg embed.Config, o InitOptions, lim time.Durati
 func firstLine(err error) string { return strings.TrimSpace(strings.SplitN(err.Error(), "\n", 2)[0]) }
 
 // prepare makes the directories, the .gitignore, the git repository and the index; each only if missing.
-func prepare(p Paths, out io.Writer) error {
+func prepare(p Paths, out io.Writer) (commitErr, err error) {
 	for _, d := range []string{"wiki", "notes", "facts"} {
 		if err := os.MkdirAll(filepath.Join(p.Repo, d), 0o755); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	gi := filepath.Join(p.Repo, ".gitignore")
 	madeIgnore := false
 	if _, err := os.Stat(gi); os.IsNotExist(err) {
 		if err := os.WriteFile(gi, []byte("*.db\n*.db-shm\n*.db-wal\n"), 0o644); err != nil {
-			return err
+			return nil, err
 		}
 		madeIgnore = true
 	}
 	if _, err := os.Stat(filepath.Join(p.Repo, ".git")); os.IsNotExist(err) {
 		if _, err := exec.LookPath("git"); err != nil {
 			fmt.Fprintln(out, "warning: the git program is not installed; notes will be saved as files without commits")
-		} else if o, err := exec.Command("git", "-C", p.Repo, "init", "-q", "-b", "main").CombinedOutput(); err != nil {
-			fmt.Fprintf(out, "warning: git init failed (%v): %s\n", err, strings.TrimSpace(string(o)))
+		} else if o, err := store.Git(p.Repo, "init", "-q", "-b", "main"); err != nil {
+			fmt.Fprintf(out, "warning: git init failed (%v): %s\n", err, o)
 		} else if madeIgnore {
-			// the initial commit holds the .gitignore, so `git status` is clean after init
-			c := exec.Command("git", "-C", p.Repo, "-c", "user.name=hms", "-c", "user.email=hms@localhost", "commit", "-q", "-m", "hms init", "--", ".gitignore")
-			if o, err := exec.Command("git", "-C", p.Repo, "add", "--", ".gitignore").CombinedOutput(); err != nil {
-				fmt.Fprintf(out, "warning: git add failed (%v): %s\n", err, strings.TrimSpace(string(o)))
-			} else if o, err := c.CombinedOutput(); err != nil {
-				fmt.Fprintf(out, "warning: the first commit failed (%v): %s\n", err, strings.TrimSpace(string(o)))
+			// the initial commit holds the .gitignore, so `git status` is clean after init. When it fails nothing stays
+			// staged: a staged .gitignore would make the committer refuse every later memory commit.
+			o, err := store.Git(p.Repo, "add", "--", ".gitignore")
+			if err == nil {
+				o, err = store.Git(p.Repo, "-c", "user.name=hms", "-c", "user.email=hms@localhost", "commit", "-q", "-m", "hms init", "--", ".gitignore")
+			}
+			if err != nil {
+				store.Git(p.Repo, "reset", "-q", "--", ".gitignore")
+				commitErr = fmt.Errorf("committed: NO (the first commit failed: %v: %s); the files are saved, run hms doctor", err, firstLine(errors.New(o)))
 			}
 		}
 	}
 	d, err := index.Open(p.DB)
 	if err != nil {
-		return fmt.Errorf("open index %s: %w", p.DB, err)
+		return nil, fmt.Errorf("open index %s: %w", p.DB, err)
 	}
 	d.Close()
 	fmt.Fprintf(out, "memory repository: %s\nindex:             %s\n", p.Repo, p.DB)
-	return nil
+	return commitErr, nil
 }
