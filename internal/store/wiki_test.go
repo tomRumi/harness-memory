@@ -66,7 +66,7 @@ func TestWikiReadByPathAndByTitleWithLinksFooter(t *testing.T) {
 	if _, err := st.WikiRead("twin"); err == nil || !strings.Contains(err.Error(), "wiki/p/Twin") || !strings.Contains(err.Error(), "wiki/q/Twin") {
 		t.Fatalf("ambiguous title: %v", err)
 	}
-	if got, err := st.WikiRead("p/twin"); err != nil || got != "t\n" {
+	if got, err := st.WikiRead("p/twin"); err != nil || !strings.HasPrefix(got, "t\n") { // the twin has the same text, so it may be listed as related
 		t.Fatalf("explicit project: %q %v", got, err)
 	}
 	if got, err := st.WikiRead("Wait..."); err == nil {
@@ -168,5 +168,43 @@ func TestTitleWithSpacesAndAccentsIsWrittenCommittedAndRecalled(t *testing.T) {
 	st.Commit.Flush()
 	if gitOut(t, repo, "status", "--porcelain") != "" || st.Commit.LastErr() != nil {
 		t.Fatalf("deletion not committed: %s %v", gitOut(t, repo, "status", "--porcelain"), st.Commit.LastErr())
+	}
+}
+
+func TestWikiReadRelatedLine(t *testing.T) {
+	st, e, _ := newStore(t)
+	const same = "The scheduler retries failed jobs three times and then alerts the owner.\n"
+	putPage(t, st, "wiki/p/Alpha.md", same)
+	putPage(t, st, "wiki/q/Beta.md", same)
+	putPage(t, st, "wiki/p/Gamma.md", "Bananas oranges lemons pears cherries plums.\n")
+	putPage(t, st, "wiki/p/Index.md", same)
+	got, err := st.WikiRead("Alpha")
+	if err != nil || !strings.HasSuffix(got, "\n---\nRelated: [[q/Beta]] (1.00)\n") {
+		t.Fatalf("Alpha: %v\n%q", err, got) // Gamma is under the floor, Index is never listed
+	}
+	if got, _ := st.WikiRead("Gamma"); strings.Contains(got, "Related:") {
+		t.Fatalf("a page with nothing close gets no line: %q", got)
+	}
+	if got, _ := st.WikiRead("p/Index"); strings.Contains(got, "Related:") {
+		t.Fatalf("an Index page gets no line: %q", got)
+	}
+	// the embedder goes down: the new page has no vectors, the stored ones are still used, and reading never fails
+	e.fail.Store(true)
+	putPage(t, st, "wiki/p/Delta.md", "Freshly written words nobody embedded yet.\n") // vectors are keyed by text: a copy would reuse them
+	if got, err := st.WikiRead("Delta"); err != nil || strings.Contains(got, "Related:") {
+		t.Fatalf("a page without vectors gets no line: %v %q", err, got)
+	}
+	if got, err := st.WikiRead("Alpha"); err != nil || !strings.HasSuffix(got, "Related: [[q/Beta]] (1.00)\n") {
+		t.Fatalf("Alpha with the embedder down: %v %q", err, got)
+	}
+	// no embedder at all
+	st.Emb = nil
+	if got, err := st.WikiRead("Alpha"); err != nil || strings.Contains(got, "Related:") {
+		t.Fatalf("without an embedder: %v %q", err, got)
+	}
+	// a matrix handed in by the server is used as it is
+	st.Matrix = func() *index.Matrix { m, _ := st.DB.LoadMatrix("bag"); return m }
+	if got, _ := st.WikiRead("Alpha"); !strings.Contains(got, "Related: [[q/Beta]] (1.00)") {
+		t.Fatalf("shared matrix: %q", got)
 	}
 }

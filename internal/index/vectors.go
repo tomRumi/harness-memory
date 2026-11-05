@@ -201,14 +201,18 @@ type Matrix struct {
 	IDs     []int64
 	Kind    []string
 	Project []string
+	Node    []string // the node id of each chunk
 	vecs    []float32
 	Missing int // active wiki, note and fact chunks that have no vector yet
+
+	pagesOnce sync.Once
+	pageSet   *pageSet
 }
 
 // LoadMatrix reads every vector of model for active chunks. It fails if the cache mixes dimensions.
 func (d *DB) LoadMatrix(model string) (*Matrix, error) {
 	m := &Matrix{}
-	rows, err := d.Query(`SELECT c.id, n.kind, n.project, v.dim, v.vec FROM chunks c JOIN nodes n ON n.id=c.node_id
+	rows, err := d.Query(`SELECT c.id, n.kind, n.project, n.id, v.dim, v.vec FROM chunks c JOIN nodes n ON n.id=c.node_id
 		JOIN vec.vectors v ON v.text_hash=c.text_hash AND v.model=? WHERE n.kind IN `+vectorKinds+` ORDER BY c.id`, model)
 	if err != nil {
 		return nil, err
@@ -216,10 +220,10 @@ func (d *DB) LoadMatrix(model string) (*Matrix, error) {
 	defer rows.Close()
 	for rows.Next() {
 		var id int64
-		var kind, proj string
+		var kind, proj, node string
 		var dim int
 		var blob []byte
-		if err := rows.Scan(&id, &kind, &proj, &dim, &blob); err != nil {
+		if err := rows.Scan(&id, &kind, &proj, &node, &dim, &blob); err != nil {
 			return nil, err
 		}
 		if m.Dim == 0 {
@@ -231,6 +235,7 @@ func (d *DB) LoadMatrix(model string) (*Matrix, error) {
 		m.IDs = append(m.IDs, id)
 		m.Kind = append(m.Kind, kind)
 		m.Project = append(m.Project, proj)
+		m.Node = append(m.Node, node)
 		m.vecs = append(m.vecs, bytesf32(blob)...)
 	}
 	if err := rows.Err(); err != nil {

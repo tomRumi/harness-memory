@@ -47,6 +47,7 @@ func New(st *store.Store, db *index.DB, emb index.Embedder) (*Server, error) {
 		return nil, err
 	}
 	st.OnWrite = func() { s.Reload() }
+	st.Matrix = s.matrix
 	return s, nil
 }
 
@@ -390,7 +391,7 @@ func (s *Server) Handler() http.Handler {
 				}
 				return text(id)
 			})
-		mcp.AddTool(m, &mcp.Tool{Name: "wiki_read", Description: "Read one wiki page in full by its path under wiki/ or by its title. The answer ends with the pages it links to and the pages that link to it."},
+		mcp.AddTool(m, &mcp.Tool{Name: "wiki_read", Description: "Read one wiki page in full by its path under wiki/ or by its title. The answer ends with the pages it links to, the pages that link to it and the pages related to it by meaning."},
 			func(ctx context.Context, _ *mcp.CallToolRequest, in WikiReadIn) (*mcp.CallToolResult, any, error) {
 				t, err := s.St.WikiRead(in.Path)
 				if err != nil {

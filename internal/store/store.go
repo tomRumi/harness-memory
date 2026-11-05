@@ -38,8 +38,11 @@ type Store struct {
 	Commit *Committer
 	// OnWrite, if set, is called after a write has been indexed and embedded (the server reloads its vectors there).
 	OnWrite func()
-	mu      sync.Mutex
-	ev      *sql.DB
+	// Matrix, if set, returns the loaded vectors for the "Related" line of wiki_read (the server shares its own).
+	// Without it the matrix is read from the index on each call when there is an embedder.
+	Matrix func() *index.Matrix
+	mu     sync.Mutex
+	ev     *sql.DB
 
 	embedMu  sync.Mutex
 	embedErr error // the last embedding error after a write
@@ -425,7 +428,7 @@ func (s *Store) RetireCandidates() []string {
 
 // WikiRead returns a wiki page, given its path under wiki/ (project/Title.md, with or without the wiki/ prefix) or
 // its title (Title or project/Title, any case, or an alias). A title is resolved the way a [[link]] is. The page is
-// followed by a footer naming the pages it links to and the pages that link to it.
+// followed by a footer naming the pages it links to, the pages that link to it and the pages closest in meaning.
 func (s *Store) WikiRead(path string) (string, error) {
 	in := filepath.ToSlash(strings.TrimSpace(path))
 	in = strings.TrimPrefix(in, "wiki/")
@@ -512,6 +515,9 @@ func (s *Store) linksFooter(id string) string {
 		}
 		b.WriteString(l.label + ": " + strings.Join(names, ", ") + "\n")
 	}
+	if r := s.relatedLine(id, proj); r != "" {
+		b.WriteString(r)
+	}
 	if b.Len() == 0 {
 		return ""
 	}
@@ -550,4 +556,33 @@ func (s *Store) writeIndexPageLocked(proj string) (rel string, wrote bool, err e
 		return "", false, err
 	}
 	return rel, true, s.DB.Upsert(s.Repo, rel)
+}
+
+// relatedLine is "Related: [[A]] (0.81), [[B]] (0.77)": the pages closest in meaning, at most index.RelatedShown with a
+// cosine of at least index.RelatedFloor. It is empty when there are no vectors for the page or none that close. The
+// embedder is never called: vectors already stored are used.
+func (s *Store) relatedLine(id, proj string) string {
+	if index.IsSpecialPage(id) {
+		return ""
+	}
+	var m *index.Matrix
+	if s.Matrix != nil {
+		m = s.Matrix()
+	} else if s.Emb != nil {
+		m, _ = s.DB.LoadMatrix(s.Emb.ID())
+	}
+	rel, ok := m.RelatedPages(id, index.RelatedShown)
+	if !ok {
+		return ""
+	}
+	var names []string
+	for _, r := range rel {
+		if r.Score >= index.RelatedFloor {
+			names = append(names, fmt.Sprintf("[[%s]] (%.2f)", linkName(r.NodeID, proj), r.Score))
+		}
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	return "Related: " + strings.Join(names, ", ") + "\n"
 }

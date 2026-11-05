@@ -418,3 +418,22 @@ func TestWikiReadByTitleAndRecallShowTitlesWithSpacesAndAccents(t *testing.T) {
 		t.Fatalf("backlink:\n%s", got)
 	}
 }
+
+func TestWikiReadRelatedLineThroughTheServer(t *testing.T) {
+	sess, srv, repo, e, _ := setup(t)
+	rel := "wiki/proj/Ports again.md"
+	os.WriteFile(filepath.Join(repo, filepath.FromSlash(rel)), []byte("# Ports\n\n## Daemon\nThe daemon listens on port 8765 over loopback only.\n"), 0o644)
+	if err := srv.DB.Upsert(repo, rel); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := call(t, sess, "wiki_read", map[string]any{"path": "proj/ports.md"}); strings.Contains(got, "Related:") {
+		t.Fatalf("the new page has no vectors yet, so there is no line:\n%s", got)
+	}
+	srv.DB.EmbedPending(context.Background(), e, nil)
+	srv.Reload()
+	e.setDown(true) // stored vectors are used, the embedder is not called
+	got, isErr := call(t, sess, "wiki_read", map[string]any{"path": "proj/ports.md"})
+	if isErr || !strings.HasSuffix(got, "Related: [[Ports again]] (1.00)\n") {
+		t.Fatalf("wiki_read:\n%s", got)
+	}
+}
