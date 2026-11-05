@@ -157,14 +157,10 @@ func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 // rules and blank lines. Empty when the body has no text.
 func FirstSentence(body string) string {
 	var parts []string
-	fence := false
+	var fence md.Fence
 	for _, ln := range strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n") {
 		t := strings.TrimSpace(ln)
-		if strings.HasPrefix(t, "```") || strings.HasPrefix(t, "~~~") {
-			fence = !fence
-			continue
-		}
-		skip := fence || strings.HasPrefix(t, "#") || strings.Trim(t, "-*_ ") == "" && t != ""
+		skip := fence.Line(ln) || strings.HasPrefix(t, "#") || strings.Trim(t, "-*_ ") == "" && t != ""
 		if t == "" || skip {
 			if len(parts) > 0 {
 				break

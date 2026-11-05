@@ -1,7 +1,11 @@
 // Package chunk splits text into the pieces that are indexed and returned by recall.
 package chunk
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/tomRumi/harness-memory-service/internal/md"
+)
 
 // WikiCap is the most characters one chunk of a wiki section may hold; a longer section is cut.
 const WikiCap = 4000
@@ -35,8 +39,9 @@ func Wiki(body string) []Piece {
 		}
 		sb.Reset()
 	}
+	var fence md.Fence
 	for _, line := range strings.SplitAfter(body, "\n") {
-		if strings.HasPrefix(line, "## ") {
+		if !fence.Line(line) && strings.HasPrefix(line, "## ") { // a "## " line inside a code block is code
 			flush()
 			cur = Piece{Section: strings.TrimSpace(strings.TrimPrefix(line, "## "))}
 		}

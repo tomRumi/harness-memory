@@ -111,8 +111,11 @@ func Render(fm map[string]any, body string) []byte {
 	return b.Bytes()
 }
 
-// Fence tracks fenced code blocks (``` and ~~~) line by line. A block opens with a run of three or more of one
-// marker character and closes with a run of the same character that is at least as long.
+// Fence tracks fenced code blocks (``` and ~~~) line by line, as CommonMark has them. Every place that has to know
+// whether a line is code (the check, the link finder, the chunker, the summary) uses this one type. A fence line has at
+// most three spaces of indentation (four spaces or a tab make indented code, not a fence), may sit inside a blockquote
+// (`> ```), opens with a run of three or more of one marker character, and closes with a run of the same character that
+// is at least as long and is followed by nothing. The info string after a backtick fence may not contain a backtick.
 type Fence struct {
 	ch byte
 	n  int
@@ -121,15 +124,15 @@ type Fence struct {
 // Line feeds the next line and reports whether it belongs to a fenced block: the opening line, the lines inside and
 // the closing line.
 func (f *Fence) Line(line string) bool {
-	t := strings.TrimSpace(line)
+	c, n, rest := fenceRun(line)
 	if f.n == 0 {
-		if c, n := fenceRun(t); n >= 3 {
+		if n >= 3 && (c == '~' || !strings.Contains(rest, "`")) {
 			f.ch, f.n = c, n
 			return true
 		}
 		return false
 	}
-	if c, n := fenceRun(t); c == f.ch && n >= f.n && strings.Trim(t, string(c)) == "" {
+	if c == f.ch && n >= f.n && strings.TrimSpace(rest) == "" {
 		f.ch, f.n = 0, 0
 	}
 	return true
@@ -138,15 +141,32 @@ func (f *Fence) Line(line string) bool {
 // Open reports whether a fenced block is still open.
 func (f *Fence) Open() bool { return f.n > 0 }
 
-func fenceRun(t string) (byte, int) {
-	if t == "" || (t[0] != '`' && t[0] != '~') {
-		return 0, 0
+// fenceRun removes blockquote markers and up to three spaces of indentation and returns the marker character, the
+// length of the run of it, and what follows the run. No marker (or four spaces, or a tab, of indentation): 0, 0.
+func fenceRun(l string) (byte, int, string) {
+	l = strings.TrimRight(l, "\r")
+	for {
+		sp := len(l) - len(strings.TrimLeft(l, " "))
+		if sp > 3 || sp == len(l) {
+			return 0, 0, ""
+		}
+		l = l[sp:]
+		if l[0] != '>' {
+			break
+		}
+		l = strings.TrimPrefix(l[1:], " ")
+		if l == "" {
+			return 0, 0, ""
+		}
+	}
+	if l[0] != '`' && l[0] != '~' {
+		return 0, 0, ""
 	}
 	n := 0
-	for n < len(t) && t[n] == t[0] {
+	for n < len(l) && l[n] == l[0] {
 		n++
 	}
-	return t[0], n
+	return l[0], n, l[n:]
 }
 
 // stripInlineCode blanks the inline code spans of one line (a run of backticks up to the next run of the same length).
