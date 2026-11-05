@@ -40,11 +40,11 @@ All three are markdown files in a local git repository. The files are the record
 ### 3.3 Merge (curation), step by step
 
 1. **Who runs it.** A scheduled job in any harness, with the model that harness already uses. The service has no model of its own. The cadence is the job's schedule. A machine with no harness can set a model address (`HMS_LLM_URL`, `HMS_LLM_MODEL`); there is no default.
-2. **Sync first.** If the memory repository has a remote, the job pulls before it starts and pushes after it finishes. If the push is rejected because another machine merged first, the job runs `git pull --rebase` and pushes again; if that stops with a conflict it runs `git rebase --abort`, stops, and tells the owner that the merge is safe in the local commit and the remote merged first. It never resets. Writes on one machine take a lock file in the memory home, so two `hms` processes wait for each other; there is no owner setting. A memory that is never pushed has nothing to sync.
+2. **Sync first.** The job first looks at the repository: if `git status --porcelain` shows anything other than untracked files, or a rebase or merge is in progress, or HEAD is detached, it stops and tells the owner; it runs `hms doctor` and stops on a FAIL or on a repository-state WARN. Then, if the memory repository has a remote, it pulls before it starts and pushes after it finishes. If the push is rejected because another machine merged first, the job runs `git pull --rebase` and pushes again; if that stops with a conflict it runs `git rebase --abort`, stops, and tells the owner that the merge is safe in the local commit and the remote merged first. It never resets: after `git rebase --abort` the repository is back at its last local commit and the owner resolves the conflict by hand. Writes on one machine take a lock file in the memory home, so two `hms` processes wait for each other; there is no owner setting. A memory that is never pushed has nothing to sync.
 3. **Ask.** `hms curate -pending` returns, per project: up to 40 of the oldest waiting notes, the titles and one-line summaries of the existing pages, and the full text of the five pages closest to the notes in meaning.
 4. **Write.** The model decides, for each note, which page it belongs to or whether a new page is needed. It returns the whole new text of each changed page, may add `[[Page Title]]` links, and gives each new page a one-line summary.
 5. **Submit.** `hms curate -submit` gives the pages back.
-6. **Check** (section 4). A page that passes is written. A page that fails is not; its notes go to the page `Unsorted` as plain bullets, so nothing is lost and nothing gets stuck. A page edited by hand while the job ran is detected by its content hash; it is left alone and its notes wait for the next run.
+6. **Check** (section 4). A page that passes is written. A page that fails is not; its notes go to the page `Unsorted` as plain bullets, so nothing gets stuck. Files left by an interrupted run are committed by the next `hms` command that writes. A page edited by hand while the job ran is detected by its content hash; it is left alone and its notes wait for the next run.
 7. **Clear.** The merged notes are deleted. The `Index` page is regenerated from the page titles and summaries. One git commit records everything.
 
 ## 4. The merge check
@@ -57,9 +57,9 @@ It does not judge meaning. It counts and compares.
 | Each note: a run of 8 words of its text is in the new page (a note under 8 words must appear whole) | The note really arrived. |
 | Every number of a note is in the same section of the page | A port number or a count cannot change on the way. |
 | Every new `[[link]]` points to a page that exists or is created in the same submission | No broken links appear. A link that was already in the old text is old text and is kept. |
-| The merge adds an even number of code fence lines (``` or ~~~) | A block cannot be left open by the merge. A fence the page already had is old text. Links and fences inside code are not judged. |
+| The merge does not leave a code fence open at the end of the page (a fence closes only with the same character and at least as many of them as it opened with) | A block cannot be left open by the merge. A page that already ended inside a fence is old text. Links inside code are not judged. |
 | The page is not shorter than before and not longer than before plus three times its notes plus 2,000 characters | Stops runaway output. |
-| The title is a plain name (no slash, no leading dot, under 100 characters and 200 bytes; accents compare in Unicode NFC) | The title is the file name, so Obsidian can open it. |
+| The title is a plain name (no slash, no leading dot, under 100 characters and 200 bytes; titles compare in Unicode NFC with full case folding, as the file system does) | The title is the file name, so Obsidian can open it. |
 
 ## 5. The wiki
 
@@ -83,7 +83,7 @@ Text with [[Another Page]] links, in the usual Obsidian way.
 
 ## 6. Install on a clean machine
 
-1. `hms init` creates the memory repository (with a local git repository), the index and the settings, then checks the embedder.
+1. `hms init` creates the memory repository (with a local git repository), and the index, commits its `.gitignore` as the first commit when it made the repository, then checks the embedder.
 2. **Embedder found, model present:** done, vectors on.
 3. **Embedder found, model missing:** it shows the model name and its size and asks before pulling it (`--yes` for scripted installs; without a terminal it only prints the command).
 4. **No embedder:** it prints one line saying what to install and carries on in keyword-only mode. That state shows on the first line of every recall answer and in `stats` until it is fixed. It is never silent.

@@ -8,8 +8,8 @@ Obsidian as it is.
   particular agent or model.
 - **Files are the record.** The search index and the vectors are built from the files and can be deleted at any time.
 - **Notes become a wiki.** Agents save short notes while they work. A scheduled job in the agent's own harness merges them
-  into interlinked wiki pages with its own model. The service checks that nothing was lost, files the result and makes one
-  git commit.
+  into interlinked wiki pages with its own model. The service checks that an 8-word run of each note and its numbers arrived, files the result and makes one
+  git commit; a page that fails the check goes to Unsorted.
 
 ```sh
 go build -o hms ./cmd/hms
@@ -46,7 +46,7 @@ machine without a GPU (a 3B model gave no answer in 10 minutes, an 8B model none
 merged 10 real notes into 4 pages in about a minute.
 
 **The merge check counts; it does not judge.** A page is written only if every old line is still there in the same order,
-every note's words and numbers arrived, new links point to pages that exist, and the length is sane. A page that fails the check is
+an 8-word run of every note (a note under 8 words: the whole note) and every number of it arrived, new links point to pages that exist, and the length is sane. A page that fails the check is
 not written and its notes go to Unsorted as plain bullets, so the queue never blocks.
 
 **Keywords and vectors together.** Keywords find exact names, numbers and paths; vectors find meaning. For plain
@@ -60,7 +60,7 @@ pure-Go library, so no C compiler is needed. The MCP server library is the offic
 goroutines: 100 simultaneous saves give 100 files, no lost note and one commit (tested).
 
 **Safe by default.** The service listens on the loopback interface only. Hidden files and files with private keys are never
-indexed. A commit hook refuses commits that carry a home path, a credential shape, a private key or a public address.
+indexed. The source clone has a commit hook (`scripts/hooks/pre-commit`, enabled with `git config core.hooksPath scripts/hooks`) that refuses commits carrying a home path, a credential shape, a private key or a public address; `hms init` installs no hook in the memory repository.
 
 ## Status
 

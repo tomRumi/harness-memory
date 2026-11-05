@@ -12,13 +12,14 @@ Commands, file formats, the merge check and settings. For what the service is an
   afterwards in the background (5 second limit, outside the write lock), and `stats` shows `vectors: unavailable: <reason>` until it works again.
 - `retire` and `learn(supersedes=id)` delete the note or fact file. The deletion is committed; git history keeps the
   text, so a deleted note can be recovered with `git checkout`.
-- One committer makes the commits: after a quiet moment, never during a merge or rebase, never when you have staged
+- One committer per process makes the commits (`hms serve` and each `hms curate` or `hms wiki index` run have their own; the lock file keeps their writes apart, and every writing command first commits what an interrupted run left behind): after a quiet moment, never during a merge or rebase, never when you have staged
   something else, and it retries after a failure.
 - `feedback` records helpful or unhelpful ratings per session; a note that five different sessions rated unhelpful
   (and none helpful) is listed as a candidate: `hms curate` prints `rated unhelpful by 5 sessions, none helpful: <ids>`. Only `retire` deletes.
 - No secret is indexed: hidden files and directories are skipped, and a file holding a private key block is never
-  indexed (it is reported by name). A commit hook (`scripts/hooks/pre-commit`) refuses a commit that carries a home
-  path, a credential shape, a private key, or a public IP address.
+  indexed (it is reported by name). The source clone has a commit hook (`scripts/hooks/pre-commit`, enabled with
+  `git config core.hooksPath scripts/hooks`) that refuses a commit carrying a home path, a credential shape, a private
+  key, or a public IP address. `hms init` does not install it in the memory repository.
 
 ## The wiki
 
@@ -38,7 +39,12 @@ Text with [[Another Page]], [[Another Page|shown text]], [[Another Page#Heading]
 ```
 
 - **Title rules** (`wiki.ValidTitle`): not empty, at most 100 characters, no `/ \ : | # ^ [ ] * " < > ?` or control
-  character, no leading dot, no leading or trailing space, and not `Index` (reserved for the generated page).
+  character, no leading dot, no leading or trailing space, at most 200 bytes of UTF-8 (a file name is limited in bytes), and neither
+  `Index` nor `Unsorted` (both are pages of the service).
+- **Titles are compared case-insensitively and Unicode-normalised,** as Obsidian and macOS do: Unicode NFC, then full
+  case folding. `Café` written in one piece or two, `Ports` and `ports`, `Strasse` and `Straße`, `ΟΔΟΣ` and `οδος`,
+  `file` and `ﬁle` name the same page. A new page whose title folds to an existing page is that page (it needs the
+  page's `base_hash`); two titles of one submission that fold equal are one page, and the second goes to Unsorted.
 - **Links** resolve as in Obsidian: by file name or alias, ignoring case; the same project first, otherwise any
   project if exactly one page answers; `[[project/Title]]` names the project. Several answers with none in the same
   project, or two in the same project, make the link ambiguous. The resolved page is kept in the index and is
