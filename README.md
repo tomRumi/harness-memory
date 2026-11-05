@@ -18,12 +18,12 @@ any time; a rebuild gives the same state hash, and a hand edit to one file chang
 
 ## What works today
 
-- `hms init`, `rescan`, `recall`, `embed`, `stats`, `hash`, `digests`, `bench`, `serve`.
+- `hms init`, `doctor`, `rescan`, `recall`, `embed`, `stats`, `hash`, `digests`, `bench`, `serve`.
 - Seven MCP tools: `recall`, `learn`, `wiki_read`, `fact_add`, `retire`, `feedback`, `stats`.
 - `recall` searches three layers: `wiki`, `memory` (notes and facts) and `fact`; the default asks wiki and memory.
-  Keyword search, with optional vector search fused by rank.
+  Keyword search and vector search (on by default) fused by rank.
 - Saving never fails because the embedder is down: the note is written, indexed and committed, the vector is made
-  afterwards, and `stats` shows `embedder: unavailable: <reason>` until it works again.
+  afterwards, and `stats` shows `vectors: unavailable: <reason>` until it works again.
 - `retire` and `learn(supersedes=id)` delete the note or fact file. The deletion is committed; git history keeps the
   text, so a deleted note can be recovered with `git checkout`.
 - One committer makes the commits: after a quiet moment, never during a merge or rebase, never when you have staged
@@ -45,17 +45,26 @@ and duplicate detection, and the recipes for harness jobs.
 ```sh
 go build -o hms ./cmd/hms
 export HMS_HOME=$HOME/.local/share/harness-memory-service
-./hms init                       # creates the memory repository and the index
+./hms init                       # creates the memory repository (with git) and the index, checks the embedder
 ./hms rescan                     # reads wiki/, notes/ and facts/
 ./hms recall -p myproject "how does the build work"
 ./hms serve                      # MCP on http://127.0.0.1:8765/mcp, loopback only, no authentication
 ```
 
-Optional vectors: install a local model server, pull a model (`ollama pull nomic-embed-text` for the default),
-run `./hms embed`, then `./hms recall -vectors ...` or `./hms serve -vectors`. Other servers and models are set with
-`HMS_EMBED_API` (`ollama` or `openai`), `HMS_EMBED_URL`, `HMS_EMBED_MODEL`, `HMS_EMBED_KEY`. Vectors are cached in a
-separate file keyed by model and text, so a rebuilt index does not re-embed. If the model server is unreachable,
-`serve` starts anyway: writes still work and recall uses keywords only.
+Vectors are on by default. `hms init` checks the embedder: with a local Ollama that has the model it says
+`vectors: on (nomic-embed-text)`; if the model is missing it names it with its size and asks `Download it now? [y/N]`
+(`hms init --yes` answers yes; without a terminal and without `--yes` it only prints the command to run); with no
+embedder it prints one line saying what to install and carries on. The program never installs Ollama or anything else.
+`hms doctor` repeats the checks (git, repository, index, embedder, model, vector size, chunks without a vector,
+repository state) with OK / WARN / FAIL per line, changes nothing, and exits 1 only on a FAIL; a missing embedder is a WARN.
+
+Without an embedder recall still answers by keyword and says so on the first line of every answer
+(`[vectors unavailable: <reason>; keyword match only]`; in hook mode that goes to standard error only), and `stats`
+shows `vectors: on (<model>), N of M chunks embedded`, `vectors: off` or `vectors: unavailable: <reason> (keyword match only)`.
+`HMS_VECTORS=0` (or `-vectors=false`) turns vectors off. `hms serve` embeds chunks that have no vector, once at start
+and every 60 seconds, without blocking writes or recall. `hms embed` does the same by hand. Other servers and models are
+set with `HMS_EMBED_API` (`ollama` or `openai`), `HMS_EMBED_URL` (default `http://localhost:11434`), `HMS_EMBED_MODEL`,
+`HMS_EMBED_KEY`. Vectors are cached in a separate file keyed by model and text, so a rebuilt index does not re-embed.
 
 ## Dependencies
 
@@ -66,7 +75,7 @@ separate file keyed by model and text, so a rebuilt index does not re-embed. If 
 | `github.com/modelcontextprotocol/go-sdk` | v1.8.0 | MIT, moving to Apache-2.0 (see its LICENSE) | the official MCP server |
 | `go.yaml.in/yaml/v3` | v3.0.6 | MIT and Apache-2.0 (see its LICENSE and NOTICE) | frontmatter |
 | the `git` program | any recent | GPL-2.0, called as a command | commits |
-| a model server such as Ollama (optional) | any | its own | vectors |
+| a model server such as Ollama (optional; without it recall is keyword-only) | any | its own | vectors |
 
 `go.sum` pins the module graph.
 
