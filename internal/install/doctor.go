@@ -13,6 +13,7 @@ import (
 	"github.com/tomRumi/harness-memory-service/internal/embed"
 	"github.com/tomRumi/harness-memory-service/internal/index"
 	"github.com/tomRumi/harness-memory-service/internal/store"
+	"github.com/tomRumi/harness-memory-service/internal/wiki"
 )
 
 // Doctor runs the checks, prints one line each (OK, WARN or FAIL) and changes nothing. It returns the number of FAILs.
@@ -63,6 +64,7 @@ func Doctor(p Paths, out io.Writer) (fails int) {
 		line("WARN", "commits", "skipped: no usable git repository")
 	} else {
 		doctorRepoState(p.Repo, line)
+		doctorFolders(p.Repo, line)
 	}
 	return fails
 }
@@ -155,5 +157,29 @@ func doctorRepoState(repo string, line func(level, what, detail string)) {
 		line("WARN", "commits", fmt.Sprintf("%q is staged and is not a note, fact or wiki entry; commits wait until it is committed or unstaged", st.Foreign[0]))
 	default:
 		line("OK", "commits", "repository state fine (no merge or rebase, nothing foreign staged)")
+	}
+}
+
+// doctorFolders warns about what makes the service refuse or lose a save: project folders whose name is not the
+// canonical project name (capitals or invalid characters; the service writes the lower-case path, and git on a
+// case-insensitive disk may not stage it), and notes, facts or wiki folders that git ignores (every save is refused).
+func doctorFolders(repo string, line func(level, what, detail string)) {
+	warned := false
+	for _, tree := range wiki.Trees {
+		for _, n := range store.OddFolders(repo, tree) {
+			warned = true
+			if c, err := wiki.Project(n); err == nil {
+				line("WARN", "project folder", fmt.Sprintf("%s/%s has capital letters; project names are lower-case: git mv %s/%s %s/%s, then run hms rescan", tree, n, tree, n, tree, c))
+			} else {
+				line("WARN", "project folder", fmt.Sprintf("%s/%s is not a valid project name (lower-case letters, digits, dot, dash, underscore); rename it with git mv, then run hms rescan", tree, n))
+			}
+		}
+		if _, err := store.Git(repo, "check-ignore", "-q", "--", tree+"/doctor-check/Sample.md"); err == nil {
+			warned = true
+			line("WARN", "ignored folder", fmt.Sprintf("git ignores %s/; every save is refused until the ignore rule is removed (see .gitignore, .git/info/exclude, the global ignore file)", tree))
+		}
+	}
+	if !warned {
+		line("OK", "memory folders", "project folders are lower-case, notes, facts and wiki are not ignored by git")
 	}
 }
