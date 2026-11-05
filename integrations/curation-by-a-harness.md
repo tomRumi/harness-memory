@@ -11,10 +11,10 @@ The service has no model of its own. A scheduled job in any agent harness writes
 2. `hms curate -pending` prints a JSON list, one entry per project that has waiting notes. Nothing waiting: stop.
 3. For each entry, write the new pages as the entry's `prompt` says and save the answer as JSON.
 4. `hms curate -submit FILE` hands the answer back and prints one line per page: `merged`, `unsorted` (the page failed a check and its notes went to the page Unsorted) or `stale` (someone edited the page meanwhile; the notes stay for the next run).
-5. If the memory repository has a remote: `git push`. If the push is rejected because another machine merged first, throw this run away (`git reset --hard @{u}`) and start again from step 1. Do this at most twice.
+5. If the memory repository has a remote: `git push`. If the push is rejected because another machine merged first, run `git pull --rebase` and push again. If that stops with a conflict, run `git rebase --abort`, stop, and tell the owner: the merge is safe in the local commit, and the remote merged first. Never reset: the local commits are the only copy of the merge.
 6. Report the lines the service printed.
 
-There is no lock and no owner setting. The git remote decides who wins. A memory that is never pushed has nothing to sync.
+There is no owner setting. The git remote decides who pushes first. A memory that is never pushed has nothing to sync. The service writes under a lock file, so two `hms` commands on one machine wait for each other.
 
 ## The job prompt (copy into a Hermes cron job, a Claude Code scheduled task, or any agent)
 
@@ -29,8 +29,9 @@ You are the curator of a markdown memory. Work only with the commands below.
    "notes", "pages" and "related". Write the answer, JSON only, to /tmp/answer-<project>.json.
    Copy page titles character for character. Never drop or shorten a note. Do not invent links.
 4. Run: hms curate -submit /tmp/answer-<project>.json -p <project>
-5. If there is a remote: git push. If it is rejected: git reset --hard @{u} and start again from step 1
-   (at most twice).
+5. If there is a remote: git push. If it is rejected: git pull --rebase, then git push again.
+   If the pull stops with a conflict: git rebase --abort, stop, and tell the owner that the
+   merge is safe in the local commit and the remote merged first. Never reset anything.
 6. Reply with the lines hms printed, and nothing else.
 ```
 
@@ -45,4 +46,4 @@ Set `HMS_LLM_URL` and `HMS_LLM_MODEL` (and `HMS_LLM_KEY` if the server wants one
 
 ## What a failed check means
 
-A page that fails a check is not written. Its notes go to `Unsorted` as plain bullets, so nothing is lost and nothing blocks. The report names the reason: an old line changed or moved, a note whose words or numbers did not arrive, a new link to a page that does not exist, an odd number of code fences, or a runaway length. Read `Unsorted` now and then and sort it into pages.
+A page that fails a check is not written. Its notes go to `Unsorted` as plain bullets, so nothing is lost and nothing blocks. The report names the reason: an old line changed or moved, a note whose words or numbers did not arrive, a new link to a page that does not exist, a merge that leaves a code fence open, or a runaway length. Read `Unsorted` now and then and sort it into pages.

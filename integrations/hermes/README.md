@@ -28,7 +28,7 @@ questions about earlier work and `learn` for conclusions worth keeping.
 
 ## What was tested
 
-Hermes discovered the tool of a test Go HTTP MCP server built with the library this service uses (step 0a); the real service was not registered in Hermes. The weekly
+Hermes discovered the tool of a test Go HTTP MCP server built with the library this service uses; the real service was not registered in Hermes. The weekly
 merge job was run by a Hermes agent (Sonnet 5.5, default tools) on a copy of a real wiki with 10 waiting notes, using the job
 prompt from [curation-by-a-harness.md](../curation-by-a-harness.md) unchanged: 1 minute 5 seconds, 14 tool calls, 10 notes
 merged into 4 pages, none to `Unsorted`, one commit, no notes left waiting. The job was not installed in a live Hermes.

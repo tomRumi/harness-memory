@@ -7,11 +7,11 @@ at that address.
 | Tool | Use |
 |---|---|
 | `recall` | search wiki entries, notes and facts together; returns short hits with their source |
-| `learn` | save a note (up to 500 characters, with a project and a `topic:type` kind) |
+| `learn` | save a note (up to 500 characters, with a project and an optional `topic:type` label that is informational only) |
 | `wiki_read` | read a wiki page by path or title; the answer ends with its links, backlinks and related pages |
 | `fact_add` | save a durable fact |
 | `retire` | delete a wrong note or fact (git keeps the text) |
-| `feedback` | say whether a recalled note helped; needs a session name; a note that 5 sessions rated unhelpful is deleted at the next merge |
+| `feedback` | say whether a recalled note helped; needs a session name; a note that 5 sessions rated unhelpful is listed by `hms curate`; only `retire` deletes |
 | `stats` | counts, whether vectors are on, notes waiting, last commit problem; use it as the connection check |
 
 A client that cannot reach the service must say so (`stats` fails) rather than act as if memory were empty.

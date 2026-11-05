@@ -26,8 +26,8 @@ All three are markdown files in a local git repository. The files are the record
 
 ### 3.1 Save
 
-1. `learn(text, project, kind)`. Empty text is refused. Text over 500 characters is cut. Saving the same text twice gives the same note.
-2. The service writes `notes/<project>/<id>.md`, updates the index and asks for a commit. **Saving never fails because the embedder is down.** The vector is made afterwards; until then recall finds the note by keyword.
+1. `learn(text, project, kind)`. Empty text, or text with no letter or digit, is refused. `kind` is optional and informational. Text over 500 characters is cut. Saving the same text twice gives the same note.
+2. The service writes `notes/<project>/<id>.md`, updates the index and asks for a commit. **Saving never fails because the embedder is down.** The vector is made afterwards, in the background, outside the write lock (5 second limit); until then recall finds the note by keyword.
 3. `learn(supersedes=id)` deletes the older note it replaces.
 
 ### 3.2 Recall
@@ -40,7 +40,7 @@ All three are markdown files in a local git repository. The files are the record
 ### 3.3 Merge (curation), step by step
 
 1. **Who runs it.** A scheduled job in any harness, with the model that harness already uses. The service has no model of its own. The cadence is the job's schedule. A machine with no harness can set a model address (`HMS_LLM_URL`, `HMS_LLM_MODEL`); there is no default.
-2. **Sync first.** If the memory repository has a remote, the job pulls before it starts and pushes after it finishes. If the push is rejected because another machine merged first, the job throws its work away and starts again. There is no lock and no owner setting. A memory that is never pushed has nothing to sync.
+2. **Sync first.** If the memory repository has a remote, the job pulls before it starts and pushes after it finishes. If the push is rejected because another machine merged first, the job runs `git pull --rebase` and pushes again; if that stops with a conflict it runs `git rebase --abort`, stops, and tells the owner that the merge is safe in the local commit and the remote merged first. It never resets. Writes on one machine take a lock file in the memory home, so two `hms` processes wait for each other; there is no owner setting. A memory that is never pushed has nothing to sync.
 3. **Ask.** `hms curate -pending` returns, per project: up to 40 of the oldest waiting notes, the titles and one-line summaries of the existing pages, and the full text of the five pages closest to the notes in meaning.
 4. **Write.** The model decides, for each note, which page it belongs to or whether a new page is needed. It returns the whole new text of each changed page, may add `[[Page Title]]` links, and gives each new page a one-line summary.
 5. **Submit.** `hms curate -submit` gives the pages back.
@@ -57,9 +57,9 @@ It does not judge meaning. It counts and compares.
 | Each note: a run of 8 words of its text is in the new page (a note under 8 words must appear whole) | The note really arrived. |
 | Every number of a note is in the same section of the page | A port number or a count cannot change on the way. |
 | Every new `[[link]]` points to a page that exists or is created in the same submission | No broken links appear. A link that was already in the old text is old text and is kept. |
-| An even number of code fences | A block cannot be left open. |
+| The merge adds an even number of code fence lines (``` or ~~~) | A block cannot be left open by the merge. A fence the page already had is old text. Links and fences inside code are not judged. |
 | The page is not shorter than before and not longer than before plus three times its notes plus 2,000 characters | Stops runaway output. |
-| The title is a plain name (no slash, no leading dot, under 100 characters) | The title is the file name, so Obsidian can open it. |
+| The title is a plain name (no slash, no leading dot, under 100 characters and 200 bytes; accents compare in Unicode NFC) | The title is the file name, so Obsidian can open it. |
 
 ## 5. The wiki
 

@@ -9,13 +9,13 @@ Commands, file formats, the merge check and settings. For what the service is an
 - `recall` searches three layers: `wiki`, `memory` (notes and facts) and `fact`; the default asks wiki and memory.
   Keyword search and vector search (on by default) fused by rank.
 - Saving never fails because the embedder is down: the note is written, indexed and committed, the vector is made
-  afterwards, and `stats` shows `vectors: unavailable: <reason>` until it works again.
+  afterwards in the background (5 second limit, outside the write lock), and `stats` shows `vectors: unavailable: <reason>` until it works again.
 - `retire` and `learn(supersedes=id)` delete the note or fact file. The deletion is committed; git history keeps the
   text, so a deleted note can be recovered with `git checkout`.
 - One committer makes the commits: after a quiet moment, never during a merge or rebase, never when you have staged
   something else, and it retries after a failure.
 - `feedback` records helpful or unhelpful ratings per session; a note that five different sessions rated unhelpful
-  (and none helpful) is listed as a candidate for deletion.
+  (and none helpful) is listed as a candidate: `hms curate` prints `rated unhelpful by 5 sessions, none helpful: <ids>`. Only `retire` deletes.
 - No secret is indexed: hidden files and directories are skipped, and a file holding a private key block is never
   indexed (it is reported by name). A commit hook (`scripts/hooks/pre-commit`) refuses a commit that carries a home
   path, a credential shape, a private key, or a public IP address.
@@ -88,7 +88,7 @@ For each page, in order: the title must be valid (and not `Index` or `Unsorted`)
 batch (hash differs), or whose new title already exists, is **stale** and its notes stay pending; then the check below.
 A page that passes is written and its notes are deleted. A page that fails is not written; its notes are appended to
 the page `Unsorted` as bullets `- <text> (<date>, <short id>)`, then deleted. Notes no page took stay pending. Then the
-`Index` page is regenerated, notes that five sessions rated unhelpful are deleted, and **one commit** records it all
+`Index` page is regenerated (an `Index.md` without `generated: true` is hand-written and is left alone, with a warning), and **one commit** records it all
 (`curate <project>: <n> notes into <m> pages (<k> to Unsorted)`). A merge or rebase in progress refuses the submit.
 
 The check (`curate.CheckPage`) counts and compares; it does not judge meaning:
@@ -98,8 +98,8 @@ The check (`curate.CheckPage`) counts and compares; it does not judge meaning:
 | insert only | every non-blank line of the old body is in the new body, same order (white space collapsed) |
 | each note | a run of 8 consecutive words of the note (case, punctuation and list markers ignored) is in the new body; a note under 8 words is in it whole |
 | numbers | every number of the note (list numbers at line start ignored; `80` is not `8080`) is in the section of the new body where the note's run was found |
-| links | every `[[link]]` resolves to a page, or to a page created in the same submission |
-| fences | the number of lines starting with three backticks is even |
+| links | every new `[[link]]` resolves to a page, or to a page created in the same submission (links inside code and `![[embeds]]` are not links; names compare in Unicode NFC) |
+| fences | the merge adds an even number of lines starting with ``` or ~~~ (fences the page already had are old text) |
 | length | not shorter than the old body; at most old + 3 x the notes' length + 2,000 characters |
 
 ## Setup details
@@ -136,6 +136,7 @@ set with `HMS_EMBED_API` (`ollama` or `openai`), `HMS_EMBED_URL` (default `http:
 | `modernc.org/sqlite` | v1.61.1 | BSD-3-Clause | SQLite with FTS5, pure Go, no C compiler |
 | `github.com/modelcontextprotocol/go-sdk` | v1.8.0 | MIT, moving to Apache-2.0 (see its LICENSE) | the official MCP server |
 | `go.yaml.in/yaml/v3` | v3.0.6 | MIT and Apache-2.0 (see its LICENSE and NOTICE) | frontmatter |
+| `golang.org/x/text` | v0.43.0 | BSD-3-Clause | Unicode NFC for titles, link names and the merge check |
 | the `git` program | any recent | GPL-2.0, called as a command | commits |
 | a model server such as Ollama (optional; without it recall is keyword-only) | any | its own | vectors |
 

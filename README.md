@@ -46,8 +46,8 @@ machine without a GPU (a 3B model gave no answer in 10 minutes, an 8B model none
 merged 10 real notes into 4 pages in about a minute.
 
 **The merge check counts; it does not judge.** A page is written only if every old line is still there in the same order,
-every note's words and numbers arrived, new links point to pages that exist, and the length is sane. A page that fails goes
-to `Unsorted` as plain bullets, so a poor writer cannot lose a note and cannot block the queue.
+every note's words and numbers arrived, new links point to pages that exist, and the length is sane. A page that fails the check is
+not written and its notes go to Unsorted as plain bullets, so the queue never blocks.
 
 **Keywords and vectors together.** Keywords find exact names, numbers and paths; vectors find meaning. For plain
 questions, keywords alone answered about as well as keywords plus vectors in our tests, so vectors earn their place on
@@ -64,7 +64,7 @@ indexed. A commit hook refuses commits that carry a home path, a credential shap
 
 ## Status
 
-Built and tested: everything above, with 167 automated tests that pass under the race detector, and an end-to-end merge with
+Built and tested: everything above, with more than 160 automated tests that pass under the race detector, and an end-to-end merge with
 a hosted model run by a Hermes agent. Not yet run: the hook inside Claude Code itself, the wiki inside Obsidian (the rules
 Obsidian needs are checked by a test), Windows. There is no continuous integration yet.
 
