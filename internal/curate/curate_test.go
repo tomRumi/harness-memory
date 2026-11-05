@@ -262,3 +262,89 @@ func TestConfigDefaultsToNotTheOwner(t *testing.T) {
 		t.Fatalf("%v %+v", err, c)
 	}
 }
+
+func entryWithTenNotes(t *testing.T) (*store.Store, string) {
+	st, repo := newStore(t)
+	os.MkdirAll(filepath.Join(repo, "wiki/p/modules"), 0o755)
+	os.WriteFile(filepath.Join(repo, "wiki/p/modules/rag.md"), []byte("# rag\n\n## Setup\nText.\n"), 0o644)
+	st.DB.Rescan(repo)
+	learnN(t, st, 10, "p", "rag:gotcha")
+	return st, repo
+}
+
+func TestWithoutAModelAnExistingEntryWaitsForAWriter(t *testing.T) {
+	st, _ := entryWithTenNotes(t)
+	rep, err := Run(context.Background(), st, nil, owner(), true, "")
+	if err != nil || rep.Merged() != 0 || rep.Outcomes[0].Result != "needs-writer" || count(st, "status='active'") != 10 {
+		t.Fatalf("%v %s", err, rep.Text())
+	}
+}
+
+func TestNoModelIsConfiguredUnlessBothSettingsAreGiven(t *testing.T) {
+	t.Setenv("HMS_LLM_URL", "")
+	t.Setenv("HMS_LLM_MODEL", "")
+	if LLMFromEnv() != nil {
+		t.Fatal("no endpoint set: there must be no model, and no silent default")
+	}
+	t.Setenv("HMS_LLM_URL", "http://localhost:1/v1")
+	if LLMFromEnv() != nil {
+		t.Fatal("a URL without a model name is not a configuration")
+	}
+	t.Setenv("HMS_LLM_MODEL", "m")
+	if LLMFromEnv() == nil {
+		t.Fatal("both set: a model")
+	}
+}
+
+func TestAHarnessCanListAndSubmitABatch(t *testing.T) {
+	st, repo := entryWithTenNotes(t)
+	pend, err := Pending(st, "")
+	if err != nil || len(pend) != 1 || pend[0].New || len(pend[0].Notes) != 10 || !strings.Contains(pend[0].Prompt, "[["+pend[0].Notes[0].ID+"]]") || !strings.Contains(pend[0].Entry, "## Setup") {
+		t.Fatalf("%v %+v", err, pend)
+	}
+	b, _ := json.Marshal(pend)
+	if !strings.Contains(string(b), `"target":"wiki/p/modules/rag.md"`) {
+		t.Fatalf("%s", b)
+	}
+	// a faithful section from the harness's own model
+	o, err := Submit(context.Background(), st, owner(), pend[0].Target, pend[0].IDs, Fallback(pend[0].Notes))
+	if err != nil || o.Result != "merged" || count(st, "status='superseded'") != 10 {
+		t.Fatalf("%v %+v", err, o)
+	}
+	st.Commit.Flush()
+	if got, _ := os.ReadFile(filepath.Join(repo, "wiki/p/modules/rag.md")); strings.Count(string(got), "[[") != 10 {
+		t.Fatalf("%s", got)
+	}
+	// the same batch cannot be submitted twice
+	if _, err := Submit(context.Background(), st, owner(), pend[0].Target, pend[0].IDs, "x"); err == nil {
+		t.Fatal("a batch that was merged already must be refused")
+	}
+}
+
+func TestASubmittedSectionThatLosesNotesFallsBackToBullets(t *testing.T) {
+	for _, bad := range []string{"", "Everything is fine.", "- short [[x]]"} {
+		st2, repo2 := entryWithTenNotes(t)
+		pend2, _ := Pending(st2, "")
+		o, err := Submit(context.Background(), st2, owner(), pend2[0].Target, pend2[0].IDs, bad)
+		if err != nil || o.Result != "fallback" || count(st2, "status='superseded'") != 10 {
+			t.Fatalf("%q: %v %+v", bad, err, o)
+		}
+		if got, _ := os.ReadFile(filepath.Join(repo2, "wiki/p/modules/rag.md")); !strings.Contains(string(got), "every 5 minutes and keeps 3 copies") {
+			t.Fatalf("%q: the notes must be held whole:\n%s", bad, got)
+		}
+	}
+}
+
+func TestSubmitRefusesTheWrongMachineAndWrongNotes(t *testing.T) {
+	st, _ := entryWithTenNotes(t)
+	pend, _ := Pending(st, "")
+	if _, err := Submit(context.Background(), st, Config{}, pend[0].Target, pend[0].IDs, Fallback(pend[0].Notes)); err == nil || count(st, "status='active'") != 10 {
+		t.Fatal("a machine that is not the owner must not merge")
+	}
+	if _, err := Submit(context.Background(), st, owner(), pend[0].Target, pend[0].IDs[:9], "x"); err == nil {
+		t.Fatal("a batch with other notes than the ready ones must be refused")
+	}
+	if _, err := Submit(context.Background(), st, owner(), "wiki/p/modules/other.md", pend[0].IDs, "x"); err == nil {
+		t.Fatal("another target must be refused")
+	}
+}

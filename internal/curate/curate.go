@@ -22,6 +22,10 @@ import (
 	"github.com/tomRumi/harness-memory-service/internal/store"
 )
 
+// Writer-free operation. The service does not need a model of its own: a harness (a scheduled Hermes job, Claude Code, any
+// agent) can ask for the ready batches with Pending, write each section with its own model, and hand it back with Submit.
+// Submit runs the same check as a model call inside the service and falls back to plain bullets in the same way.
+
 // Merger writes one section from notes. existing is the text of the entry (empty when it does not exist yet).
 type Merger interface {
 	Section(ctx context.Context, existing string, notes []gate.Note) (string, error)
@@ -213,15 +217,106 @@ func Run(ctx context.Context, st *store.Store, m Merger, cfg Config, apply bool,
 	return rep, nil
 }
 
-func runBatch(ctx context.Context, st *store.Store, m Merger, b Batch) (Outcome, error) {
-	o := Outcome{Batch: b}
+func batchNotes(st *store.Store, b Batch) ([]gate.Note, error) {
 	var notes []gate.Note
 	for _, id := range b.IDs {
 		t, err := st.NoteText(id)
 		if err != nil {
-			return o, err
+			return nil, err
 		}
 		notes = append(notes, gate.Note{ID: bareID(id), Text: t})
+	}
+	return notes, nil
+}
+
+// PendingBatch is a ready batch with everything a writer needs. A harness returns Target and IDs unchanged, plus Section.
+type PendingBatch struct {
+	Project string      `json:"project"`
+	Target  string      `json:"target"`
+	IDs     []string    `json:"ids"`
+	New     bool        `json:"new_entry"` // true: the service writes it itself, no section needed
+	Entry   string      `json:"entry"`     // the current text of the wiki entry
+	Notes   []gate.Note `json:"notes"`
+	Prompt  string      `json:"prompt"`
+}
+
+// Pending lists the ready batches that need a writer.
+func Pending(st *store.Store, project string) ([]PendingBatch, error) {
+	batches, _, _, err := Plan(st, project)
+	if err != nil {
+		return nil, err
+	}
+	out := []PendingBatch{}
+	for _, b := range batches {
+		notes, err := batchNotes(st, b)
+		if err != nil {
+			return nil, err
+		}
+		pb := PendingBatch{Project: b.Project, Target: b.Target, IDs: b.IDs, New: b.Missing, Notes: notes}
+		if !b.Missing {
+			if pb.Entry, err = st.WikiRead(b.Target); err != nil {
+				return nil, err
+			}
+			pb.Prompt = BuildPrompt(pb.Entry, notes)
+		}
+		out = append(out, pb)
+	}
+	return out, nil
+}
+
+// Submit takes a section written elsewhere for one ready batch, checks it and appends it. The batch must still be ready:
+// the notes must be active and be the notes the service would pick now. A section that fails the check, or an empty one,
+// is replaced by plain bullets, so a poor writer cannot lose a note.
+func Submit(ctx context.Context, st *store.Store, cfg Config, target string, ids []string, section string) (Outcome, error) {
+	if !cfg.Curation.Owner {
+		return Outcome{}, fmt.Errorf("this machine is not the curation owner (curation.owner in config.yaml); nothing merged")
+	}
+	if st.Commit != nil && st.Commit.Busy() {
+		return Outcome{}, fmt.Errorf("the repository is in the middle of a merge or rebase; nothing merged")
+	}
+	batches, _, _, err := Plan(st, "")
+	if err != nil {
+		return Outcome{}, err
+	}
+	for _, b := range batches {
+		if b.Target == target && sameIDs(b.IDs, ids) {
+			return runBatch(ctx, st, sectionWriter(section), b)
+		}
+	}
+	return Outcome{}, fmt.Errorf("no ready batch for %s with these notes: it was merged already, or the notes changed; ask for the pending batches again", target)
+}
+
+type sectionWriter string
+
+func (s sectionWriter) Section(context.Context, string, []gate.Note) (string, error) {
+	return string(s), nil
+}
+
+func sameIDs(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	x, y := append([]string(nil), a...), append([]string(nil), b...)
+	sort.Strings(x)
+	sort.Strings(y)
+	for i := range x {
+		if x[i] != y[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func runBatch(ctx context.Context, st *store.Store, m Merger, b Batch) (Outcome, error) {
+	o := Outcome{Batch: b}
+	notes, err := batchNotes(st, b)
+	if err != nil {
+		return o, err
+	}
+	if m == nil && !b.Missing {
+		o.Result = "needs-writer"
+		o.Problems = []string{"no model is configured (HMS_LLM_URL, HMS_LLM_MODEL); a harness can write it: hms curate -pending, then -submit"}
+		return o, nil
 	}
 	stamp := store.Stamp()
 	var section, header string

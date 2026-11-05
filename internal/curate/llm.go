@@ -15,22 +15,22 @@ import (
 	"github.com/tomRumi/harness-memory-service/internal/gate"
 )
 
-// LLM calls any server that speaks the OpenAI chat-completions protocol (Ollama does, at /v1). Settings come from the
-// environment: HMS_LLM_URL (default http://localhost:11434/v1), HMS_LLM_MODEL (default granite4:3b, the predecessor's
-// editor model), HMS_LLM_KEY (only if the server needs one).
+// LLM calls any server that speaks the OpenAI chat-completions protocol (Ollama does, at /v1). It is optional: the
+// normal path is that a harness writes the section with its own model and submits it (see Submit). Settings come from the
+// environment and there are no defaults: HMS_LLM_URL and HMS_LLM_MODEL must both be set, HMS_LLM_KEY only if the server
+// needs one. A subscription login (OAuth) cannot be used here; that belongs to the harness.
 type LLM struct {
 	URL, Model, Key string
 	HTTP            *http.Client
 }
 
+// LLMFromEnv returns the configured model, or nil when none is configured.
 func LLMFromEnv() *LLM {
-	get := func(k, d string) string {
-		if v := os.Getenv(k); v != "" {
-			return v
-		}
-		return d
+	url, model := os.Getenv("HMS_LLM_URL"), os.Getenv("HMS_LLM_MODEL")
+	if url == "" || model == "" {
+		return nil
 	}
-	return &LLM{URL: get("HMS_LLM_URL", "http://localhost:11434/v1"), Model: get("HMS_LLM_MODEL", "granite4:3b"), Key: os.Getenv("HMS_LLM_KEY"), HTTP: &http.Client{Timeout: timeoutFromEnv()}}
+	return &LLM{URL: url, Model: model, Key: os.Getenv("HMS_LLM_KEY"), HTTP: &http.Client{Timeout: timeoutFromEnv()}}
 }
 
 // MaxTokens bounds the answer: ten notes of up to 500 characters need about 2,000 tokens, and a small model that does
@@ -64,16 +64,22 @@ NEW LEARNINGS:
 
 Output the new section now:`
 
-func (l *LLM) Section(ctx context.Context, existing string, notes []gate.Note) (string, error) {
+// BuildPrompt is the full instruction for writing a section: used by the built-in model call and handed to harnesses
+// by Pending.
+func BuildPrompt(existing string, notes []gate.Note) string {
 	var nl strings.Builder
 	for _, n := range notes {
 		fmt.Fprintf(&nl, "- %s [[%s]]\n", strings.Join(strings.Fields(n.Text), " "), n.ID)
 	}
+	return fmt.Sprintf(Prompt, existing, nl.String())
+}
+
+func (l *LLM) Section(ctx context.Context, existing string, notes []gate.Note) (string, error) {
 	body, _ := json.Marshal(map[string]any{
 		"model":       l.Model,
 		"temperature": 0.2,
 		"max_tokens":  MaxTokens,
-		"messages":    []map[string]string{{"role": "user", "content": fmt.Sprintf(Prompt, existing, nl.String())}},
+		"messages":    []map[string]string{{"role": "user", "content": BuildPrompt(existing, notes)}},
 	})
 	req, err := http.NewRequestWithContext(ctx, "POST", strings.TrimRight(l.URL, "/")+"/chat/completions", bytes.NewReader(body))
 	if err != nil {

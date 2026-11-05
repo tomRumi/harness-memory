@@ -37,6 +37,8 @@ usage: hms [--home DIR] [--repo DIR] [--db FILE] <command> [arguments]
                                keyword recall over active nodes; -vectors (or HMS_VECTORS=1) adds the vector pass
   bench <questions.json> ...   recall latency over the questions' texts (query vector cached, then with embedding)
   curate [-apply] [-p project]    merge notes into wiki entries (dry run unless -apply; only on the curation owner)
+  curate -pending                 ready batches as JSON for a harness that writes the sections with its own model
+  curate -submit FILE|-           check and append a section written for one pending batch
   restore <id> [-p project]       bring back a retired, archived or superseded note
   serve [-addr A] [-vectors]  MCP over HTTP (loopback only) with seven tools: recall learn wiki_read fact_add retire feedback stats
   stats                        node counts by kind and project
@@ -302,6 +304,8 @@ func main() {
 	case "curate":
 		fs := flag.NewFlagSet("curate", flag.ExitOnError)
 		apply := fs.Bool("apply", false, "do the merge (default: only report what would be merged)")
+		pending := fs.Bool("pending", false, "print the ready batches as JSON, for a harness that writes the sections itself")
+		submit := fs.String("submit", "", "file with {\"target\",\"ids\",\"section\"} written for one pending batch ('-' reads standard input)")
 		proj := fs.String("p", "", "project (default: all)")
 		fs.Parse(rest)
 		st, closeAll := openStore(p)
@@ -310,10 +314,48 @@ func main() {
 		if err != nil {
 			die("%v", err)
 		}
-		rep, err := curate.Run(context.Background(), st, curate.LLMFromEnv(), cfg, *apply, *proj)
-		fmt.Print(rep.Text())
-		if err != nil {
-			die("curate: %v", err)
+		switch {
+		case *pending:
+			pb, err := curate.Pending(st, *proj)
+			if err != nil {
+				die("%v", err)
+			}
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			enc.Encode(pb)
+		case *submit != "":
+			var in io.Reader = os.Stdin
+			if *submit != "-" {
+				f, err := os.Open(*submit)
+				if err != nil {
+					die("%v", err)
+				}
+				defer f.Close()
+				in = f
+			}
+			var req struct {
+				Target  string   `json:"target"`
+				IDs     []string `json:"ids"`
+				Section string   `json:"section"`
+			}
+			if err := json.NewDecoder(io.LimitReader(in, 8<<20)).Decode(&req); err != nil {
+				die("submit file not read: %v", err)
+			}
+			o, err := curate.Submit(context.Background(), st, cfg, req.Target, req.IDs, req.Section)
+			if err != nil {
+				die("%v", err)
+			}
+			fmt.Print(curate.Report{Owner: true, Applied: true, Outcomes: []curate.Outcome{o}}.Text())
+		default:
+			var mg curate.Merger
+			if l := curate.LLMFromEnv(); l != nil {
+				mg = l
+			}
+			rep, err := curate.Run(context.Background(), st, mg, cfg, *apply, *proj)
+			fmt.Print(rep.Text())
+			if err != nil {
+				die("curate: %v", err)
+			}
 		}
 	case "restore":
 		fs := flag.NewFlagSet("restore", flag.ExitOnError)
@@ -372,7 +414,7 @@ func main() {
 			go func() { // the owner merges ready batches every ten minutes; others never do
 				for {
 					time.Sleep(10 * time.Minute)
-					rep, err := curate.Run(context.Background(), st, curate.LLMFromEnv(), cfg, true, "")
+					rep, err := curate.Run(context.Background(), st, daemonMerger(), cfg, true, "")
 					if err != nil {
 						fmt.Fprintln(os.Stderr, "hms: curate:", err)
 					} else if rep.Merged() > 0 || len(rep.Retired) > 0 {
@@ -587,4 +629,12 @@ func openStore(p paths) (*store.Store, func()) {
 		die("%v", err)
 	}
 	return st, func() { st.Close(); d.Close() }
+}
+
+// daemonMerger is the configured model, or nil (batches that need a writer then wait for a harness to submit them).
+func daemonMerger() curate.Merger {
+	if l := curate.LLMFromEnv(); l != nil {
+		return l
+	}
+	return nil
 }

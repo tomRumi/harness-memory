@@ -65,6 +65,13 @@ judge meaning; curation only appends and keeps the notes, so a bad merge is reco
 The weekly duplicate and worst-rated reports, a provider for each agent harness, the Claude Code hook, autosave, sync and
 the one-curator rule, backup, `import claude`, a `recall --format=context` for hooks, the weekly report.
 
+## Who writes the merged text
+
+The service does not need a model of its own. `hms curate -pending` lists the ready batches, a scheduled job in any
+harness writes the sections with its own model, and `hms curate -submit` hands them back to be checked, appended and
+committed. A service-side model call (`HMS_LLM_URL`, `HMS_LLM_MODEL`, optional `HMS_LLM_KEY`) exists for machines with no
+harness; there is no default and no subscription login. See `integrations/curation-by-a-harness.md`.
+
 ## Install (from source)
 
 ```sh

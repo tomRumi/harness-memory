@@ -84,7 +84,10 @@ func missingNumbers(old, new string) []string {
 }
 
 // Note is one source note of a merge.
-type Note struct{ ID, Text string }
+type Note struct {
+	ID   string `json:"id"`
+	Text string `json:"text"`
+}
 
 // CheckAppend checks a section written from notes. Every note must survive in it (some verbatim run of Window words,
 // or the whole note when it is shorter than that), the section, without its citations, must be 0.60 to 1.60 times the
