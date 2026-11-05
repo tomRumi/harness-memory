@@ -41,6 +41,9 @@ usage: hms [--home DIR] [--repo DIR] [--db FILE] <command> [arguments]
   serve [-addr A] [-vectors=false]  MCP over HTTP (loopback only) with seven tools: recall learn wiki_read fact_add retire feedback stats
   wiki links [-p P]            list broken and ambiguous [[links]] of wiki pages (one line each, then a summary); exit 0
   wiki index [-p P]            write wiki/<project>/Index.md (all projects without -p) when its content changed, and commit it
+  wiki related <page> [-n 5] [-p P]  the pages closest in meaning to a page (title or path): score, [[Title]], summary
+  wiki duplicates [-p P] [-t T]  pairs of pages that look like copies (cosine of page vectors >= T, default 0.92)
+  wiki eval-pairs -pairs FILE  score related, unrelated and duplicate page pairs against the current vectors; read only; exit 0
   curate                       notes waiting per project and the age of the oldest (read only)
   curate -pending [-p P] [-max N]  the batches to merge as JSON: notes, page titles, related pages, instructions
   curate -submit FILE|- [-p P] check and write the pages of a model answer; one commit; exit 1 on error
@@ -443,8 +446,11 @@ func main() {
 // wikiCmd runs `hms wiki links` and `hms wiki index`. It makes the index match the files first, so that it reports
 // what is on disk now. It returns the exit status.
 func wikiCmd(p paths, args []string, stdout, stderr io.Writer) int {
+	if len(args) > 0 && (args[0] == "related" || args[0] == "duplicates" || args[0] == "eval-pairs") {
+		return wikiPagesCmd(p, args, stdout, stderr)
+	}
 	if len(args) == 0 || (args[0] != "links" && args[0] != "index") {
-		fmt.Fprintln(stderr, "usage: hms wiki links [-p project] | hms wiki index [-p project]")
+		fmt.Fprintln(stderr, "usage: hms wiki links [-p project] | hms wiki index [-p project] | hms wiki related <page> [-n N] [-p project] | hms wiki duplicates [-p project] [-t threshold] | hms wiki eval-pairs -pairs FILE")
 		return 2
 	}
 	fs := flag.NewFlagSet("wiki "+args[0], flag.ContinueOnError)
