@@ -3,6 +3,7 @@ package index
 import (
 	"context"
 	"math"
+	"strings"
 	"testing"
 )
 
@@ -204,5 +205,65 @@ func TestNodeVectorEmbedsMissingChunksAndResolvePage(t *testing.T) {
 	}
 	if _, err := d.ResolvePage("Nowhere"); err == nil {
 		t.Fatal("unknown page")
+	}
+}
+
+// centredWiki makes 12 pages that all share most of their words (one style, one subject area) and differ in topic words.
+func centredWiki(t *testing.T) *Matrix {
+	t.Helper()
+	repo := t.TempDir()
+	common := "the system module handles requests and keeps state in a store with a queue and a worker that retries failed jobs "
+	topics := [][2]string{{"alpha", "bravo"}, {"alpha", "bravo"}, {"charlie", "delta"}, {"charlie", "delta"}, {"echo", "foxtrot"}, {"echo", "foxtrot"},
+		{"golf", "hotel"}, {"golf", "hotel"}, {"india", "juliet"}, {"india", "juliet"}, {"kilo", "lima"}, {"kilo", "lima"}}
+	for i, tp := range topics {
+		body := "# Page" + string(rune('A'+i)) + "\n\n" + common + strings.Repeat(tp[0]+" "+tp[1]+" ", 6) + "\n"
+		write(t, repo, "wiki/p/Page"+string(rune('A'+i))+".md", body)
+	}
+	d := openDB(t)
+	if _, err := d.Rescan(repo); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.EmbedPending(context.Background(), &bagEmbedder{model: "bag"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	m, err := d.LoadMatrix("bag")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+func TestPageVectorsAreCentredFromEightPagesUp(t *testing.T) {
+	m := centredWiki(t)
+	if m.pages().mean == nil {
+		t.Fatal("12 pages must be centred")
+	}
+	// raw cosines of this wiki are high for every pair (shared words); centred ones separate the topics
+	same, _ := m.Cosine("wiki/p/PageA", "wiki/p/PageB")  // same topic words
+	other, _ := m.Cosine("wiki/p/PageA", "wiki/p/PageE") // other topic words
+	if !(same > 0.3 && other < 0 && m.RelatedMin() == RelatedFloor) {
+		t.Fatalf("centred: same topic %v, other topic %v, floor %v", same, other, m.RelatedMin())
+	}
+	// every page vector has unit length
+	for _, id := range m.pages().ids {
+		var n float64
+		for _, x := range m.pages().vec[id] {
+			n += float64(x * x)
+		}
+		if math.Abs(n-1) > 1e-4 {
+			t.Fatalf("%s has length^2 %v", id, n)
+		}
+	}
+	// related pages use the same space: A's best match is B
+	rel, _ := m.RelatedPages("wiki/p/PageA", 1)
+	if len(rel) != 1 || rel[0].NodeID != "wiki/p/PageB" {
+		t.Fatalf("related: %+v", rel)
+	}
+}
+
+func TestSmallWikiKeepsRawVectors(t *testing.T) {
+	_, m := pageMatrix(t)
+	if m.pages().mean != nil || m.RelatedMin() != RelatedFloorRaw {
+		t.Fatal("a wiki below CenterMinPages must keep raw page vectors and the raw floor")
 	}
 }

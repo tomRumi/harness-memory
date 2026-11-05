@@ -559,7 +559,7 @@ func (s *Store) writeIndexPageLocked(proj string) (rel string, wrote bool, err e
 }
 
 // relatedLine is "Related: [[A]] (0.81), [[B]] (0.77)": the pages closest in meaning, at most index.RelatedShown with a
-// cosine of at least index.RelatedFloor. It is empty when there are no vectors for the page or none that close. The
+// cosine of at least m.RelatedMin(). It is empty when there are no vectors for the page or none that close. The
 // embedder is never called: vectors already stored are used.
 func (s *Store) relatedLine(id, proj string) string {
 	if index.IsSpecialPage(id) {
@@ -577,7 +577,7 @@ func (s *Store) relatedLine(id, proj string) string {
 	}
 	var names []string
 	for _, r := range rel {
-		if r.Score >= index.RelatedFloor {
+		if r.Score >= m.RelatedMin() {
 			names = append(names, fmt.Sprintf("[[%s]] (%.2f)", linkName(r.NodeID, proj), r.Score))
 		}
 	}

@@ -9,13 +9,22 @@ import (
 	"time"
 )
 
+// Page vectors are CENTRED: the mean of all page vectors is subtracted and the result is normalised again. Pages of one
+// wiki share a style and a subject area, so raw cosines sit in a narrow high band (0.65 to 0.99 on the test wiki) and
+// say little; after centring the shared part is gone and related pages score above 0, unrelated ones below. With fewer
+// than CenterMinPages pages there is too little to estimate the shared part from and raw vectors are used.
+//
 // Frozen settings of the meaning-based page features. Like the retrieval settings they are constants: a change is
 // a new commit with a new score from the pair evaluation (hms wiki eval-pairs), not a runtime option.
 const (
 	// RelatedFloor is the lowest cosine at which wiki_read lists a page as related.
-	RelatedFloor = 0.70
+	RelatedFloor = 0.0
+	// RelatedFloorRaw is the same floor for a wiki too small to centre (raw cosines).
+	RelatedFloorRaw = 0.70
+	// CenterMinPages is the number of wiki pages from which page vectors are centred.
+	CenterMinPages = 8
 	// DuplicateThreshold is the cosine of two page vectors from which they are reported as near-duplicates.
-	DuplicateThreshold = 0.92
+	DuplicateThreshold = 0.80
 	// RelatedShown is the number of related pages wiki_read lists.
 	RelatedShown = 5
 )
@@ -45,7 +54,23 @@ func pageTitle(id string) string { return id[strings.LastIndex(id, "/")+1:] }
 type pageSet struct {
 	ids     []string // sorted
 	project map[string]string
-	vec     map[string][]float32 // unit length
+	vec     map[string][]float32 // unit length, centred when mean is not nil
+	mean    []float32            // mean of the raw page vectors, nil when there are fewer than CenterMinPages pages
+}
+
+// center puts a raw (unit) page vector into the same space as the page vectors of this set.
+func (ps *pageSet) center(v []float32) []float32 {
+	if ps.mean == nil || len(v) != len(ps.mean) {
+		return v
+	}
+	d := make([]float64, len(v))
+	for i := range v {
+		d[i] = float64(v[i] - ps.mean[i])
+	}
+	if u := unit64(d); u != nil {
+		return u
+	}
+	return v
 }
 
 // pages builds the page vectors once per Matrix: the L2-normalised mean of the vectors of each wiki page's chunks
@@ -75,6 +100,21 @@ func (m *Matrix) pages() *pageSet {
 			}
 		}
 		sort.Strings(ps.ids)
+		if len(ps.ids) >= CenterMinPages {
+			mean := make([]float64, m.Dim)
+			for _, id := range ps.ids {
+				for j, x := range ps.vec[id] {
+					mean[j] += float64(x)
+				}
+			}
+			ps.mean = make([]float32, m.Dim)
+			for j := range mean {
+				ps.mean[j] = float32(mean[j] / float64(len(ps.ids)))
+			}
+			for _, id := range ps.ids {
+				ps.vec[id] = ps.center(ps.vec[id])
+			}
+		}
 		m.pageSet = ps
 	})
 	return m.pageSet
@@ -269,6 +309,7 @@ func (m *Matrix) MostSimilar(q []float32, project, skip string) (PageScore, bool
 		return PageScore{}, false
 	}
 	ps := m.pages()
+	q = ps.center(q)
 	var best PageScore
 	found := false
 	for _, id := range ps.ids {
@@ -386,4 +427,12 @@ func (d *DB) ResolvePage(in string) (string, error) {
 		return "", fmt.Errorf("several pages answer to %q: %s; give the project as project/Title", in, strings.Join(matches, ", "))
 	}
 	return "", fmt.Errorf("no wiki entry %q", in)
+}
+
+// RelatedMin is the lowest cosine at which a page counts as related, in the space the page vectors are in.
+func (m *Matrix) RelatedMin() float32 {
+	if m != nil && m.pages().mean != nil {
+		return RelatedFloor
+	}
+	return RelatedFloorRaw
 }
