@@ -103,9 +103,12 @@ func SetKeys(src []byte, set map[string]any) ([]byte, error) {
 			// a block or folded value goes on over indented lines; they belong to the old value. When the key has no
 			// value on its own line it is a block list, whose "- " lines may also start at column 0.
 			blockList := emptyValue(l)
+			// Inside a block list, blank lines and comment lines belong to it too: the list ends at the next line
+			// that starts a key at column 0 (the closing --- is not in bl).
 			for j := i + 1; j < len(bl); j++ {
 				c := strings.TrimRight(bl[j], "\r")
-				if strings.HasPrefix(c, " ") || strings.HasPrefix(c, "\t") || blockList && (c == "-" || strings.HasPrefix(c, "- ")) {
+				blank := strings.TrimSpace(c) == "" || strings.HasPrefix(c, "#")
+				if strings.HasPrefix(c, " ") || strings.HasPrefix(c, "\t") || blockList && (blank || c == "-" || strings.HasPrefix(c, "- ")) {
 					drop[j] = true
 					continue
 				}

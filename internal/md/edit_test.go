@@ -75,3 +75,27 @@ func TestSetKeysWritesAListAsAFlowList(t *testing.T) {
 		t.Fatalf("parsed back %v", got)
 	}
 }
+
+// A block list is replaced whole, also when it holds blank lines or comment lines; the next key stays.
+func TestSetKeysDropsAWholeBlockList(t *testing.T) {
+	for name, src := range map[string]string{
+		"blank line":   "---\ntitle: P\ntags:\n- a\n\n- b\nsummary: s\n---\nbody\n",
+		"comment line": "---\ntitle: P\ntags:\n- a\n# c\n- b\nsummary: s\n---\nbody\n",
+		"both, last":   "---\ntitle: P\nsummary: s\ntags:\n- a\n\n# c\n- b\n---\nbody\n",
+	} {
+		out, err := SetKeys([]byte(src), map[string]any{"tags": []string{"x", "y"}})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		d := Parse(out)
+		if d.Error != "" {
+			t.Fatalf("%s: broken frontmatter: %s\n%s", name, d.Error, out)
+		}
+		if strings.Contains(string(out), "- b") || strings.Contains(string(out), "- a") || strings.Contains(string(out), "# c") {
+			t.Errorf("%s: old list items left:\n%s", name, out)
+		}
+		if !strings.Contains(string(out), "title: P") || !strings.Contains(string(out), "summary: s") || !strings.HasSuffix(string(out), "---\nbody\n") {
+			t.Errorf("%s: other keys or body changed:\n%s", name, out)
+		}
+	}
+}

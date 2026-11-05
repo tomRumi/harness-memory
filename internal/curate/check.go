@@ -179,10 +179,11 @@ func CheckPage(oldBody, newBody string, notes []Note, resolve func(link string) 
 		}
 	}
 
-	// (v) fences: the merge must not leave a fence open that it opened, so what it adds is even. A page that came with
-	// an odd count (a hand edit) is old text and is kept as it is.
-	if added := countFences(newBody) - countFences(oldBody); added%2 != 0 {
-		probs = append(probs, fmt.Sprintf("the merge adds %d ``` or ~~~ lines (odd)", added))
+	// (v) fences: the merge must not leave a fence open. A fence closes only with the same character and at least as
+	// many of them as it opened with. A page that already ended inside a fence (a hand edit) is old text and is kept
+	// as it is.
+	if endsInFence(newBody) && !endsInFence(oldBody) {
+		probs = append(probs, "the merge leaves a ``` or ~~~ block open at the end of the page")
 	}
 
 	// (vi) length, counted on the lines that matter (blank lines and spacing do not count)
@@ -200,15 +201,13 @@ func CheckPage(oldBody, newBody string, notes []Note, resolve func(link string) 
 	return probs
 }
 
-// countFences counts the lines that start with ``` or ~~~.
-func countFences(body string) int {
-	n := 0
-	for _, l := range strings.Split(body, "\n") {
-		if md.IsFenceLine(l) {
-			n++
-		}
+// endsInFence reports whether a fenced code block is still open at the end of body.
+func endsInFence(body string) bool {
+	var f md.Fence
+	for _, l := range strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n") {
+		f.Line(l)
 	}
-	return n
+	return f.Open()
 }
 
 func short(id string) string {

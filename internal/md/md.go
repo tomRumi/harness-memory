@@ -149,12 +149,6 @@ func fenceRun(t string) (byte, int) {
 	return t[0], n
 }
 
-// IsFenceLine reports whether the line is a fence marker line (starts with ``` or ~~~).
-func IsFenceLine(line string) bool {
-	t := strings.TrimSpace(line)
-	return strings.HasPrefix(t, "```") || strings.HasPrefix(t, "~~~")
-}
-
 // stripInlineCode blanks the inline code spans of one line (a run of backticks up to the next run of the same length).
 func stripInlineCode(l string) string {
 	if !strings.Contains(l, "`") {

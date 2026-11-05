@@ -69,7 +69,7 @@ func TestCheckPageTable(t *testing.T) {
 		{name: "links: resolves", new: pageWith("# P\n\nSee [[Real|the page]] and [[Real#Head]].\n", port), notes: []Note{port}, resolve: func(l string) bool { return l == "Real" }},
 
 		{name: "fences: even", new: "```\ncode\n```\n" + nPort + "\n", notes: []Note{port}},
-		{name: "fences: odd", new: "```\ncode\n" + nPort + "\n", notes: []Note{port}, wantRule: "odd"},
+		{name: "fences: odd", new: "```\ncode\n" + nPort + "\n", notes: []Note{port}, wantRule: "block open"},
 
 		{name: "length: runaway", new: nPort + "\n" + strings.Repeat("Padding words that say nothing at all.\n", 100), notes: []Note{port}, wantRule: "too long"},
 		{name: "length: within old + 3 x notes + 2000", new: nPort + "\n" + strings.Repeat("Padding words that say nothing.\n", 40), notes: []Note{port}},
