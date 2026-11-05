@@ -129,6 +129,9 @@ func (c *Client) call(ctx context.Context, input []string) ([][]float32, error) 
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
 	if resp.StatusCode != 200 {
+		if resp.StatusCode == 404 && c.cfg.API == "ollama" && strings.Contains(string(raw), "not found") {
+			return nil, fmt.Errorf("model %s not found on the server at %s (run: ollama pull %s)", c.cfg.Model, c.cfg.URL, c.cfg.Model)
+		}
 		msg := strings.TrimSpace(string(raw))
 		if len(msg) > 300 {
 			msg = msg[:300]

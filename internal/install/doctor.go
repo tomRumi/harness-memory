@@ -72,7 +72,7 @@ func doctorEmbedder(db *index.DB, line func(level, what, detail string)) {
 	st := c.Check(ctx)
 	switch st.State {
 	case embed.Unreachable:
-		line("WARN", "embedder", firstLine(st.Err)+"; keyword match only. "+strings.TrimPrefix(NoEmbedderLine(cfg), "vectors: unavailable: "))
+		line("WARN", "embedder", firstLine(st.Err)+"; keyword match only (to fix: install Ollama from https://ollama.com and run `ollama pull "+cfg.Model+"`, or set HMS_EMBED_URL)")
 		line("WARN", "model", "not checked: no embedder")
 	case embed.ModelMissing:
 		line("OK", "embedder", "reachable at "+cfg.URL)

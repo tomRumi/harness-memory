@@ -64,9 +64,6 @@ func Init(p Paths, o InitOptions) error {
 		fmt.Fprintf(o.Out, "vectors: on (%s)\n", cfg.Model)
 	case embed.Unreachable:
 		fmt.Fprintln(o.Out, NoEmbedderLine(cfg))
-		if st.Err != nil {
-			fmt.Fprintf(o.Out, "  reason: %s\n", firstLine(st.Err))
-		}
 	case embed.ModelMissing:
 		pullOffer(c, cfg, o, lim)
 	}
