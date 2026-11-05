@@ -101,6 +101,7 @@ func TestPendingRelatedRankedByVotesAndUsesStoredNoteVectors(t *testing.T) {
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
+	st.WaitEmbed() // the background pass for the notes just learned must be over before the counter is reset
 	e.docs.Store(0)
 	bs, err := Pending(ctx, st, proj, 0)
 	if err != nil {
