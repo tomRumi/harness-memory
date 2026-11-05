@@ -25,6 +25,8 @@ func TestKindsOfChangeAreRefused(t *testing.T) {
 		{"path extension after a date", "The log is written to /var/log/hms/2026-11-05.json and rotated once every day.", "The log is written to /var/log/hms/2026-11-05.yaml and rotated once every day."},
 		{"time of day", "The backup starts at 09:20 and has to be finished before the shop opens again.", "The backup starts at 09:21 and has to be finished before the shop opens again."},
 		{"short quoted string", "The flag takes the exact word \"on\" and anything else is treated as switched off.", "The flag takes the exact word \"no\" and anything else is treated as switched off."},
+		{"relative path loses its parent dots", "Load the settings from ../config/app.yaml before anything else starts to run.", "Load the settings from ./config/app.yaml before anything else starts to run."},
+		{"number at the start of a wrapped line", "The shop is open every day, so the batch runs\n7. times a week without a break at the weekend.", "The shop is open every day, so the batch runs\n9. times a week without a break at the weekend."},
 		{"curly quotes then changed", "The robots value is \u201cnoindex\u201d on staging pages and \u201cindex\u201d on live pages.", "The robots value is \u201cnoindex, nofollow\u201d on staging pages and \u201cindex\u201d on live pages."},
 	}
 	for _, c := range cases {
@@ -78,5 +80,23 @@ func TestLongNotesAreCheckedInReasonableTime(t *testing.T) {
 	CheckAppend([]Note{{"cccccccc-0000-0000-0000-000000000000", big}}, "- unrelated text [[cccccccc]]")
 	if d := time.Since(start); d > 20*time.Second {
 		t.Fatalf("300 KB took %s (about 1 s without -race; 12 s with it)", d)
+	}
+}
+
+func TestASubBulletWithItsOwnTextDoesNotCoverItsParent(t *testing.T) {
+	a := Note{"aaaaaaaa-0000-0000-0000-000000000000", "The daemon listens on port 8765 and nowhere else on this machine at all."}
+	b := Note{"bbbbbbbb-0000-0000-0000-000000000000", "The old daemon listened on port 8765 until the move was done last month."}
+	section := "- The daemon listens on port 8766 and nowhere else on this machine at all. [[aaaaaaaa]]\n  - The old daemon listened on port 8765 until the move was done last month. [[bbbbbbbb]]\n"
+	if ok, _ := CheckAppend([]Note{a, b}, section); ok {
+		t.Fatal("note A's changed port was hidden by the port in note B's sub-bullet")
+	}
+}
+
+func TestListNumbersAreOnlyListNumbers(t *testing.T) {
+	if got := stripListMarks("1. a\n2. b\n   wrapped\n3. c"); got != "a\nb\n   wrapped\nc" {
+		t.Fatalf("%q", got)
+	}
+	if got := stripListMarks("is\n7. days\n2026. november"); !strings.Contains(got, "7. days") || !strings.Contains(got, "2026. november") {
+		t.Fatalf("%q", got)
 	}
 }

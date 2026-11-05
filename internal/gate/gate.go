@@ -14,6 +14,7 @@ package gate
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -125,7 +126,7 @@ func extract(text string) []value {
 	seen := map[string]bool{}
 	var out []value
 	add := func(v string, tick bool) {
-		v = strings.Trim(strings.TrimSpace(v), ".,;:!?")
+		v = strings.TrimLeft(strings.TrimRight(strings.TrimSpace(v), ".,;:!?"), ",;:!?") // a leading dot stays: ../a and ./a differ
 		if len(v) < 1 || seen[v] || !strings.ContainsFunc(v, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }) {
 			return // empty, repeated, or only punctuation ("[]", "{}"): not a value
 		}
@@ -134,7 +135,7 @@ func extract(text string) []value {
 	}
 	text = quoteFix.Replace(text)
 	text = strings.ReplaceAll(text, "[[", " ")
-	text = reListMark.ReplaceAllString(text, "")
+	text = stripListMarks(text)
 	orig := text
 	for _, m := range reURL.FindAllString(text, -1) {
 		add(m, false)
@@ -205,7 +206,7 @@ func newHolder(text string) holder {
 	text = quoteFix.Replace(text)
 	// list markers are layout: "2." at the start of a line is dropped before the lines are joined, or it would
 	// become a value of the new text and hide a changed "2"
-	h := holder{flatText: flat(reListMark.ReplaceAllString(text, "")), set: map[string]bool{}}
+	h := holder{flatText: flat(stripListMarks(text)), set: map[string]bool{}}
 	// read as written, and with white space collapsed: a value rewrapped over a line break is still one value
 	for _, src := range []string{text, h.flatText} {
 		for _, v := range extract(src) {
@@ -320,8 +321,8 @@ func blocks(section string) []string {
 			flush()
 			continue
 		}
-		if bulletStart.MatchString(l) && !(len(cur) > 0 && indentOf(l) > indentOf(cur[0])) {
-			flush() // a more indented bullet is part of the item above it
+		if bulletStart.MatchString(l) && !(len(cur) > 0 && indentOf(l) > indentOf(cur[0]) && len(strings.Fields(body(l))) <= 3) {
+			flush() // a more indented bullet that is only a source line ("source [[id]]") belongs to the item above it; one with text of its own is its own item
 		}
 		cur = append(cur, l)
 	}
@@ -379,4 +380,30 @@ func missing(old, new string) []string {
 
 func indentOf(l string) int {
 	return len(l) - len(strings.TrimLeft(l, " \t"))
+}
+
+var listLine = regexp.MustCompile(`^(\s*)(\d+)[.)]\s`)
+
+// stripListMarks removes the numbers of a numbered list ("1. ", "2. ", ...). A number at the start of a line is a
+// list number only when it is 1, or follows the previous item by one; any other ("7. days" after a wrapped line) is
+// part of the text and stays, so changing it is seen.
+func stripListMarks(text string) string {
+	lines := strings.Split(text, "\n")
+	last := 0
+	for i, l := range lines {
+		if m := listLine.FindStringSubmatch(l); m != nil {
+			n, _ := strconv.Atoi(m[2])
+			if n == 1 || (last > 0 && n == last+1) {
+				lines[i] = m[1] + l[len(m[0]):]
+				last = n
+				continue
+			}
+			last = 0
+			continue
+		}
+		if strings.TrimSpace(l) != "" && indentOf(l) == 0 {
+			last = 0 // plain text ends a list; indented lines belong to the item above
+		}
+	}
+	return strings.Join(lines, "\n")
 }
