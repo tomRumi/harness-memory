@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,7 +23,13 @@ import (
 	"github.com/tomRumi/harness-memory-service/internal/store"
 )
 
-type bag struct{ down bool }
+type bag struct {
+	mu   sync.Mutex
+	down bool
+}
+
+func (b *bag) setDown(v bool) { b.mu.Lock(); b.down = v; b.mu.Unlock() }
+func (b *bag) isDown() bool   { b.mu.Lock(); defer b.mu.Unlock(); return b.down }
 
 var wordRe = regexp.MustCompile(`[\p{L}\p{N}_]+`)
 
@@ -48,7 +55,7 @@ func (b *bag) vec(text string) []float32 {
 func (b *bag) Model() string { return "bag" }
 func (b *bag) ID() string    { return "bag" }
 func (b *bag) Docs(ctx context.Context, t []string) ([][]float32, error) {
-	if b.down {
+	if b.isDown() {
 		return nil, fmt.Errorf("embedder down")
 	}
 	o := make([][]float32, len(t))
@@ -58,7 +65,7 @@ func (b *bag) Docs(ctx context.Context, t []string) ([][]float32, error) {
 	return o, nil
 }
 func (b *bag) Query(ctx context.Context, t string) ([]float32, error) {
-	if b.down {
+	if b.isDown() {
 		return nil, fmt.Errorf("embedder down")
 	}
 	return b.vec(t), nil
@@ -174,13 +181,13 @@ func TestRecallThreeEmptyStatesAndAHit(t *testing.T) {
 
 func TestEmbedderDownIsAnUnavailableLineNotAnError(t *testing.T) {
 	s, srv, _, e, _ := setup(t)
-	e.down = true
+	e.setDown(true)
 	out, isErr := call(t, s, "recall", map[string]any{"query": "daemon port", "project": "proj", "layer": "wiki"})
 	if isErr || !strings.Contains(out, "keyword match only") || !strings.Contains(out, "8765") {
 		t.Fatalf("recall must fall back to keywords and say so: %v\n%s", isErr, out)
 	}
 	st := srv.Stats(context.Background(), StatsIn{})
-	if !strings.Contains(st, "embedder: unavailable") {
+	if !strings.Contains(st, "vectors: unavailable") {
 		t.Fatalf("stats must report the embedder state:\n%s", st)
 	}
 	if id, isErr := call(t, s, "learn", map[string]any{"text": "A note about the zorblax cache written while down.", "project": "proj", "kind": "k"}); isErr || len(id) < 36 {
@@ -190,7 +197,7 @@ func TestEmbedderDownIsAnUnavailableLineNotAnError(t *testing.T) {
 	if !strings.Contains(out, "zorblax") {
 		t.Fatalf("a note written while the embedder was down must be found by keyword:\n%s", out)
 	}
-	if st := srv.Stats(context.Background(), StatsIn{}); !strings.Contains(st, "embedder: unavailable") {
+	if st := srv.Stats(context.Background(), StatsIn{}); !strings.Contains(st, "vectors: unavailable") {
 		t.Fatalf("stats must still report the embedder as unavailable:\n%s", st)
 	}
 }
@@ -266,7 +273,7 @@ func TestStatsAndHealthz(t *testing.T) {
 	_, srv, _, _, url := setup(t)
 	out := srv.Stats(context.Background(), StatsIn{})
 	t.Logf("stats:\n%s", out)
-	for _, want := range []string{"harness-memory-service", "wiki/proj", "embedder: bag ok", "commits: ok"} {
+	for _, want := range []string{"harness-memory-service", "wiki/proj", "vectors: on (bag)", "commits: ok"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("stats lacks %q:\n%s", want, out)
 		}
@@ -277,7 +284,7 @@ func TestStatsAndHealthz(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != 200 || !strings.Contains(string(b), "embedder: bag ok") {
+	if resp.StatusCode != 200 || !strings.Contains(string(b), "vectors: on (bag)") {
 		t.Fatalf("%d %s", resp.StatusCode, b)
 	}
 }
@@ -285,11 +292,106 @@ func TestStatsAndHealthz(t *testing.T) {
 func TestContextBlockKeepsOnlyRealHits(t *testing.T) {
 	_, full, _, _, _ := setup(t)
 	srv, _ := NewReader(full.DB, nil) // keyword only, as the hook runs by default
-	if got := srv.ContextBlock(context.Background(), "zzzqqq nothing matches this", "", 1000); got != "" {
+	if got, _ := srv.ContextBlock(context.Background(), "zzzqqq nothing matches this", "", 1000); got != "" {
 		t.Fatalf("a query without a hit must give an empty block, got %q", got)
 	}
-	got := srv.ContextBlock(context.Background(), "daemon port loopback", "", 1000)
+	got, _ := srv.ContextBlock(context.Background(), "daemon port loopback", "", 1000)
 	if !strings.HasPrefix(got, "<memory-context") || !strings.HasSuffix(got, "</memory-context>") || strings.Contains(got, "no results") || strings.Contains(got, "not built") {
 		t.Fatalf("%q", got)
+	}
+}
+
+func countHeader(out string) int { return strings.Count(out, "[vectors unavailable:") }
+
+func TestVectorsHeaderOnceAndFirstWithEmbedderDown(t *testing.T) {
+	s, _, _, e, _ := setup(t)
+	call(t, s, "learn", map[string]any{"text": "The daemon restarts itself after a crash.", "project": "proj", "kind": "k"})
+	e.setDown(true)
+	out, _ := call(t, s, "recall", map[string]any{"query": "daemon", "project": "proj"})
+	if countHeader(out) != 1 || !strings.HasPrefix(out, "[vectors unavailable: embedder down; keyword match only]\n") {
+		t.Fatalf("one header line first, got:\n%s", out)
+	}
+	if strings.Contains(out, "vectors unavailable (") {
+		t.Fatalf("no per-layer warning any more:\n%s", out)
+	}
+	e.setDown(false)
+	out, _ = call(t, s, "recall", map[string]any{"query": "daemon", "project": "proj"})
+	if countHeader(out) != 0 {
+		t.Fatalf("no header while the embedder is up:\n%s", out)
+	}
+}
+
+func TestVectorsHeaderWhenNothingIsEmbeddedYet(t *testing.T) {
+	_, full, _, e, _ := setup(t)
+	e.setDown(true)
+	empty := &Server{DB: full.DB, Emb: e} // no matrix: Hybrid would never call the embedder
+	out := empty.Recall(context.Background(), RecallIn{Query: "daemon port"})
+	if countHeader(out) != 1 || !strings.Contains(out, "8765") {
+		t.Fatalf("%s", out)
+	}
+}
+
+func TestHookBlockNeverCarriesTheWarning(t *testing.T) {
+	_, full, _, e, _ := setup(t)
+	e.setDown(true)
+	srv, _ := NewReader(full.DB, e)
+	block, warn := srv.ContextBlock(context.Background(), "daemon port loopback", "", 1000)
+	if warn == nil || strings.Contains(block, "vectors unavailable") || !strings.Contains(block, "8765") {
+		t.Fatalf("warn %v block %q", warn, block)
+	}
+	if block, _ = srv.ContextBlock(context.Background(), "zzzqqq nothing matches", "", 1000); block != "" {
+		t.Fatalf("nothing matching must give an empty block: %q", block)
+	}
+}
+
+func TestStatsVectorLines(t *testing.T) {
+	_, srv, _, e, _ := setup(t)
+	ctx := context.Background()
+	if st := srv.Stats(ctx, StatsIn{}); !strings.Contains(st, "vectors: on (bag), 2 of 2 chunks embedded") {
+		t.Fatalf("%s", st)
+	}
+	e.setDown(true)
+	if st := srv.Stats(ctx, StatsIn{}); !strings.Contains(st, "vectors: unavailable: embedder down (keyword match only)") {
+		t.Fatalf("%s", st)
+	}
+	off := &Server{DB: srv.DB, St: srv.St}
+	if st := off.Stats(ctx, StatsIn{}); !strings.Contains(st, "\nvectors: off\n") {
+		t.Fatalf("%s", st)
+	}
+}
+
+func TestCatchUpEmbedsPendingChunksAfterTheEmbedderComesUp(t *testing.T) {
+	_, srv, _, e, _ := setup(t)
+	e.setDown(true)
+	if _, err := srv.St.Learn(context.Background(), "A note about the glimmerfox queue.", "proj", "k", ""); err != nil {
+		t.Fatalf("a write must succeed while the embedder is down: %v", err)
+	}
+	if miss, _, _ := srv.DB.Pending("bag"); miss != 1 {
+		t.Fatalf("one chunk must be waiting for a vector, got %d", miss)
+	}
+	before := len(srv.matrix().IDs)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { srv.CatchUp(ctx, 20*time.Millisecond); close(done) }()
+	time.Sleep(80 * time.Millisecond)
+	if miss, _, _ := srv.DB.Pending("bag"); miss != 1 {
+		t.Fatal("nothing can be embedded while the embedder is down")
+	}
+	e.setDown(false)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if miss, _, _ := srv.DB.Pending("bag"); miss == 0 && len(srv.matrix().IDs) == before+1 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if miss, _, _ := srv.DB.Pending("bag"); miss != 0 || len(srv.matrix().IDs) != before+1 {
+		t.Fatalf("catch-up must embed the chunk and reload the matrix: missing %d, matrix %d (was %d)", miss, len(srv.matrix().IDs), before)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the loop must stop when its context ends")
 	}
 }

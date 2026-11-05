@@ -110,9 +110,35 @@ func clip(t string, n int) string {
 // Recall answers a query. It never returns an error to the caller: an empty index, no result and a failing part are
 // three different lines (`not built`, `no results`, `unavailable: <reason>`).
 func (s *Server) Recall(ctx context.Context, in RecallIn) string {
+	lines, warn, early := s.recall(ctx, in)
+	if early != "" {
+		return early
+	}
+	if warn != nil {
+		lines = append([]string{VectorsHeader(warn)}, lines...)
+	}
+	return budgeted(strings.Join(lines, "\n"), in.Budget)
+}
+
+// VectorsHeader is the one line that goes first in an answer that had to use keywords only.
+func VectorsHeader(reason error) string {
+	r := strings.TrimSpace(strings.SplitN(reason.Error(), "\n", 2)[0])
+	return fmt.Sprintf("[vectors unavailable: %s; keyword match only]", r)
+}
+
+func budgeted(out string, budget int) string {
+	if budget > 0 && len([]rune(out)) > budget {
+		return string([]rune(out)[:budget]) + "…"
+	}
+	return out
+}
+
+// recall builds the lines of an answer. warn is why the vector pass could not be used (nil when it was, or when there
+// is no embedder); it is reported once, not per layer. early is a complete answer that needs no more work.
+func (s *Server) recall(ctx context.Context, in RecallIn) (lines []string, warn error, early string) {
 	q := strings.TrimSpace(in.Query)
 	if q == "" {
-		return "[recall: empty query]"
+		return nil, nil, "[recall: empty query]"
 	}
 	layer := strings.ToLower(strings.TrimSpace(in.Layer))
 	type pass struct {
@@ -132,10 +158,17 @@ func (s *Server) Recall(ctx context.Context, in RecallIn) string {
 	case "fact", "facts":
 		passes = []pass{{"fact", []string{"fact"}, 5}}
 	default:
-		return fmt.Sprintf("[recall: unknown layer %q — use auto, wiki, memory or fact]", in.Layer)
+		return nil, nil, fmt.Sprintf("[recall: unknown layer %q — use auto, wiki, memory or fact]", in.Layer)
 	}
 	proj := strings.ToLower(strings.TrimSpace(in.Project))
-	var lines []string
+	emb := s.Emb // dropped after the first failure: the other layers do not wait for a dead embedder again
+	mat := s.matrix()
+	if emb != nil {
+		warn = index.ProbeIfEmpty(ctx, emb, mat)
+		if warn != nil {
+			emb = nil
+		}
+	}
 	run := func(tag string, kinds []string, project string, quota int, prefix string) {
 		var n int
 		args := []any{}
@@ -160,13 +193,16 @@ func (s *Server) Recall(ctx context.Context, in RecallIn) string {
 			return
 		}
 		f := index.Filter{Project: project, Kinds: kinds, Limit: quota}
-		hits, via, warn := s.DB.Hybrid(ctx, s.Emb, s.matrix(), q, f)
-		if via == "" && warn != nil { // the keyword search itself failed
-			lines = append(lines, fmt.Sprintf("[%s%s unavailable: %v]", prefix, tag, warn))
+		hits, via, w := s.DB.Hybrid(ctx, emb, mat, q, f)
+		if via == "" && w != nil { // the keyword search itself failed
+			lines = append(lines, fmt.Sprintf("[%s%s unavailable: %v]", prefix, tag, w))
 			return
 		}
-		if warn != nil {
-			lines = append(lines, fmt.Sprintf("[%s%s: vectors unavailable (%v); keyword match only]", prefix, tag, warn))
+		if w != nil {
+			if warn == nil {
+				warn = w
+			}
+			emb = nil
 		}
 		if len(hits) == 0 {
 			lines = append(lines, fmt.Sprintf("[%s%s: no results]", prefix, tag))
@@ -188,14 +224,10 @@ func (s *Server) Recall(ctx context.Context, in RecallIn) string {
 			_ = before
 		}
 	}
-	out := strings.Join(lines, "\n")
-	if in.Budget > 0 && len([]rune(out)) > in.Budget {
-		out = string([]rune(out)[:in.Budget]) + "…"
-	}
 	if s.St != nil {
 		s.St.Event("recall", "", proj, clip(q, 100))
 	}
-	return out
+	return lines, warn, ""
 }
 
 // ---- stats
@@ -232,21 +264,12 @@ func (s *Server) Stats(ctx context.Context, in StatsIn) string {
 	var notes int
 	s.DB.QueryRow(`SELECT count(*) FROM nodes WHERE kind='note'`+projClause(proj), projArgs(proj)...).Scan(&notes)
 	fmt.Fprintf(&b, "notes waiting: %d\n", notes)
-	if s.Emb == nil {
-		b.WriteString("vectors: off (keyword match only; start with `serve -vectors` to use the embedder)\n")
-	} else {
-		hc, cancel := context.WithTimeout(ctx, 10*time.Second)
-		defer cancel()
-		if _, err := s.Emb.Query(hc, "health"); err != nil {
-			fmt.Fprintf(&b, "embedder: unavailable: %v\n", err)
-		} else if miss, total, err := s.DB.Pending(s.Emb.ID()); err == nil {
-			fmt.Fprintf(&b, "embedder: %s ok; %d of %d wiki/note/fact chunk texts have a vector\n", s.Emb.Model(), total-miss, total)
-			if s.St != nil && s.St.EmbedError() != nil {
-				fmt.Fprintf(&b, "embedder: the last write could not be embedded (%v); run `hms embed`\n", s.St.EmbedError())
-			}
-		}
+	b.WriteString(VectorLine(ctx, s.DB, s.Emb) + "\n")
+	if s.St != nil && s.Emb != nil && s.St.EmbedError() != nil {
+		fmt.Fprintf(&b, "vectors: the last write could not be embedded (%v); the catch-up or `hms embed` will do it\n", s.St.EmbedError())
 	}
-	if c := s.St.Commit; c != nil {
+	if s.St != nil && s.St.Commit != nil {
+		c := s.St.Commit
 		commits, lastErr, _, enabled := c.Status()
 		switch {
 		case !enabled:
@@ -260,6 +283,53 @@ func (s *Server) Stats(ctx context.Context, in StatsIn) string {
 		}
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// VectorLine is the vector state for stats: on with the model and the number of embedded chunks, off, or unavailable
+// with the reason. It asks the embedder (at most 10 s); with no embedder it makes no call.
+func VectorLine(ctx context.Context, db *index.DB, emb index.Embedder) string {
+	if emb == nil {
+		return "vectors: off"
+	}
+	hc, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if _, err := emb.Query(hc, "health"); err != nil {
+		return fmt.Sprintf("vectors: unavailable: %s (keyword match only)", strings.TrimSpace(strings.SplitN(err.Error(), "\n", 2)[0]))
+	}
+	n, total, err := db.ChunkCounts(emb.ID())
+	if err != nil {
+		return fmt.Sprintf("vectors: on (%s), chunk count unavailable: %v", emb.Model(), err)
+	}
+	return fmt.Sprintf("vectors: on (%s), %d of %d chunks embedded", emb.Model(), n, total)
+}
+
+// CatchUp embeds the chunks that have no vector, once now and then every interval, until ctx ends. It runs beside the
+// service and never holds the write lock: a write or a recall does not wait for it. A failing embedder is not an
+// error here; the next round tries again. After a round that embedded something the vector matrix is reloaded.
+func (s *Server) CatchUp(ctx context.Context, interval time.Duration) {
+	if s.Emb == nil {
+		return
+	}
+	round := func() {
+		missing, _, err := s.DB.Pending(s.Emb.ID())
+		if err != nil || missing == 0 {
+			return
+		}
+		if n, _ := s.DB.EmbedPending(ctx, s.Emb, nil); n > 0 {
+			s.Reload()
+		}
+	}
+	round()
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			round()
+		}
+	}
 }
 
 func projClause(p string) string {
@@ -374,16 +444,21 @@ func (s *Server) Handler() http.Handler {
 var noiseLine = regexp.MustCompile(`^\[(global )?(wiki|memory|fact)(:| unavailable)`)
 
 // ContextBlock is the text a harness hook adds in front of a prompt: only real hits, no empty-state lines (a prompt
-// that finds nothing adds nothing). It is empty when there is nothing to add.
-func (s *Server) ContextBlock(ctx context.Context, query, project string, budget int) string {
+// that finds nothing adds nothing). It is empty when there is nothing to add. warn is why vectors were not used, for
+// the caller to put on standard error; it is never part of the block.
+func (s *Server) ContextBlock(ctx context.Context, query, project string, budget int) (block string, warn error) {
+	all, warn, early := s.recall(ctx, RecallIn{Query: query, Project: project})
+	if early != "" {
+		return "", nil
+	}
 	var keep []string
-	for _, l := range strings.Split(s.Recall(ctx, RecallIn{Query: query, Project: project, Budget: budget}), "\n") {
+	for _, l := range strings.Split(budgeted(strings.Join(all, "\n"), budget), "\n") {
 		if strings.TrimSpace(l) != "" && !noiseLine.MatchString(l) {
 			keep = append(keep, l)
 		}
 	}
 	if len(keep) == 0 {
-		return ""
+		return "", warn
 	}
-	return "<memory-context source=\"harness-memory-service\" note=\"recalled automatically from earlier work; check it before relying on it\">\n" + strings.Join(keep, "\n") + "\n</memory-context>"
+	return "<memory-context source=\"harness-memory-service\" note=\"recalled automatically from earlier work; check it before relying on it\">\n" + strings.Join(keep, "\n") + "\n</memory-context>", warn
 }

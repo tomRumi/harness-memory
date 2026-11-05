@@ -10,7 +10,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
@@ -21,6 +20,7 @@ import (
 
 	"github.com/tomRumi/harness-memory-service/internal/embed"
 	"github.com/tomRumi/harness-memory-service/internal/index"
+	"github.com/tomRumi/harness-memory-service/internal/install"
 	"github.com/tomRumi/harness-memory-service/internal/server"
 	"github.com/tomRumi/harness-memory-service/internal/store"
 )
@@ -29,14 +29,16 @@ const usage = `hms: markdown-backed memory with a rebuildable index
 
 usage: hms [--home DIR] [--repo DIR] [--db FILE] <command> [arguments]
 
-  init                         create the memory repository and the index
+  init [--yes]                 create the memory repository (with git) and the index; check the embedder and offer to
+                               download the model (--yes answers yes)
+  doctor                       check git, the repository, the index and the embedder; changes nothing; exit 1 on a FAIL
   rescan                       make the index match the files (changed files only)
   embed [-reset] [-prune]      embed every wiki, note and fact chunk that has no vector yet; safe to stop and rerun
-  recall [-p P] [-k K,K] [-n N] [-vectors] [-json] <words...>
-                               keyword recall; -vectors (or HMS_VECTORS=1) adds the vector pass
+  recall [-p P] [-k K,K] [-n N] [-vectors=false] [-json] <words...>
+                               recall; keyword and vector search together (HMS_VECTORS=0 or -vectors=false: keywords only)
   bench <questions.json> ...   recall latency over the questions' texts (query vector cached, then with embedding)
-  serve [-addr A] [-vectors]  MCP over HTTP (loopback only) with seven tools: recall learn wiki_read fact_add retire feedback stats
-  stats                        node counts by kind and project
+  serve [-addr A] [-vectors=false]  MCP over HTTP (loopback only) with seven tools: recall learn wiki_read fact_add retire feedback stats
+  stats                        node counts by kind and project, and the vector state
   hash                         digest of everything derived from files
   digests                      one digest per node, as JSON
 
@@ -94,7 +96,18 @@ func main() {
 	cmd, rest := args[0], args[1:]
 	switch cmd {
 	case "init":
-		cmdInit(p)
+		fs := flag.NewFlagSet("init", flag.ExitOnError)
+		yes := fs.Bool("yes", false, "download the embedding model without asking")
+		fs.Parse(rest)
+		fi, _ := os.Stdin.Stat()
+		o := install.InitOptions{Yes: *yes, Interactive: fi != nil && fi.Mode()&os.ModeCharDevice != 0, In: os.Stdin, Out: os.Stdout}
+		if err := install.Init(install.Paths{Home: p.home, Repo: p.repo, DB: p.db}, o); err != nil {
+			die("init: %v", err)
+		}
+	case "doctor":
+		if install.Doctor(install.Paths{Home: p.home, Repo: p.repo, DB: p.db}, os.Stdout) > 0 {
+			os.Exit(1)
+		}
 	case "rescan":
 		d := open(p)
 		defer d.Close()
@@ -115,12 +128,12 @@ func main() {
 		kinds := fs.String("k", "", "kinds, comma separated: wiki,note,fact")
 		n := fs.Int("n", 5, "number of hits")
 		asJSON := fs.Bool("json", false, "print hits as JSON, with the full text")
-		withVec := fs.Bool("vectors", os.Getenv("HMS_VECTORS") == "1", "add the vector pass (needs `hms embed` and a running model server); also HMS_VECTORS=1")
+		withVec := fs.Bool("vectors", install.VectorsEnabled(), "use the vector pass as well as keywords (default on; HMS_VECTORS=0 turns it off)")
 		format := fs.String("format", "text", "text, or context for a harness hook (see -hook)")
 		hook := fs.Bool("hook", false, "with -format=context: read a UserPromptSubmit payload (JSON with prompt) on standard input")
 		fs.Parse(rest)
 		if *format == "context" {
-			os.Exit(recallContext(p, *proj, *hook, strings.Join(fs.Args(), " "), *withVec))
+			os.Exit(recallContext(p, *proj, *hook, strings.Join(fs.Args(), " "), *withVec, os.Stdin, os.Stdout, os.Stderr))
 		}
 		d := open(p)
 		defer d.Close()
@@ -131,6 +144,7 @@ func main() {
 		query := strings.Join(fs.Args(), " ")
 		var hits []index.Hit
 		var err error
+		header := "" // one line first when the vector pass could not be used
 		if !*withVec {
 			hits, err = d.Keyword(query, f)
 		} else {
@@ -144,8 +158,11 @@ func main() {
 			var via string
 			var warn error
 			hits, via, warn = d.Hybrid(ctx, e, m, query, f)
+			if warn == nil {
+				warn = index.ProbeIfEmpty(ctx, e, m)
+			}
 			if warn != nil {
-				fmt.Fprintln(os.Stderr, "hms: vector pass skipped:", warn)
+				header = server.VectorsHeader(warn)
 			}
 			if m.Missing > 0 {
 				fmt.Fprintf(os.Stderr, "hms: %d chunks have no vector yet (run `hms embed`); %s result\n", m.Missing, via)
@@ -155,6 +172,9 @@ func main() {
 			die("%v", err)
 		}
 		if *asJSON {
+			if header != "" {
+				fmt.Fprintln(os.Stderr, header)
+			}
 			type jh struct {
 				Node, Kind, Project, Path, Section, Text string
 				Score                                    float64
@@ -170,6 +190,9 @@ func main() {
 			}
 			json.NewEncoder(os.Stdout).Encode(out)
 			return
+		}
+		if header != "" {
+			fmt.Println(header)
 		}
 		if len(hits) == 0 {
 			fmt.Println("no results")
@@ -299,7 +322,7 @@ func main() {
 	case "serve":
 		fs := flag.NewFlagSet("serve", flag.ExitOnError)
 		addr := fs.String("addr", "127.0.0.1:8765", "listen address; must be a loopback address")
-		withVec := fs.Bool("vectors", os.Getenv("HMS_VECTORS") == "1", "use the embedder: vector pass in recall, vectors for new notes (default off: keyword match only)")
+		withVec := fs.Bool("vectors", install.VectorsEnabled(), "use the embedder: vector pass in recall, vectors for new notes (default on; HMS_VECTORS=0 turns it off)")
 		fs.Parse(rest)
 		host, _, err := net.SplitHostPort(*addr)
 		if err != nil {
@@ -315,7 +338,7 @@ func main() {
 			emb = embed.New(embed.Default())
 			hc, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			if _, err := emb.Health(hc); err != nil {
-				fmt.Fprintf(os.Stderr, "hms: embedder not reachable (%v): starting with keyword match only; writes still work and recall uses keywords only\n", err)
+				fmt.Fprintf(os.Stderr, "hms: vectors unavailable (%v): starting with keyword match only; writes still work, and the service embeds what is missing once the embedder answers\n", err)
 			}
 			cancel()
 		}
@@ -336,10 +359,19 @@ func main() {
 			die("serve: %v", err)
 		}
 		hs := &http.Server{Addr: *addr, Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second}
+		catchCtx, stopCatch := context.WithCancel(context.Background())
+		catchDone := make(chan struct{})
+		go func() { // embeds chunks that have no vector, now and every minute
+			defer close(catchDone)
+			srv.CatchUp(catchCtx, 60*time.Second)
+		}()
+		stopped := make(chan struct{})
 		go func() {
+			defer close(stopped)
 			sig := make(chan os.Signal, 1)
 			signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 			<-sig
+			stopCatch()
 			sctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			hs.Shutdown(sctx) // in-flight writes finish first
 			cancel()
@@ -347,8 +379,11 @@ func main() {
 		}()
 		fmt.Printf("hms serving MCP on http://%s/mcp (health: /healthz)\n", *addr)
 		if err := hs.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			stopCatch()
 			die("serve: %v", err)
 		}
+		<-stopped // the last commit is made before the process closes the store
+		<-catchDone
 	case "stats":
 		d := open(p)
 		defer d.Close()
@@ -364,9 +399,11 @@ func main() {
 		for _, k := range keys {
 			fmt.Printf("%-40s %d\n", k, m[k])
 		}
-		if miss, total, err := d.Pending(embed.New(embed.Default()).ID()); err == nil {
-			fmt.Printf("%-40s %d of %d chunk texts have a vector (%s)\n", "vectors", total-miss, total, embed.Default().Model)
+		var e index.Embedder
+		if install.VectorsEnabled() {
+			e = embed.New(embed.Default())
 		}
+		fmt.Println(server.VectorLine(context.Background(), d, e))
 	case "hash":
 		d := open(p)
 		defer d.Close()
@@ -400,26 +437,6 @@ func open(p paths) *index.DB {
 	return d
 }
 
-func cmdInit(p paths) {
-	for _, d := range []string{"wiki", "notes", "facts", "raw"} {
-		if err := os.MkdirAll(filepath.Join(p.repo, d), 0o755); err != nil {
-			die("%v", err)
-		}
-	}
-	gi := filepath.Join(p.repo, ".gitignore")
-	if _, err := os.Stat(gi); os.IsNotExist(err) {
-		os.WriteFile(gi, []byte("*.db\n*.db-shm\n*.db-wal\n"), 0o644)
-	}
-	if _, err := os.Stat(filepath.Join(p.repo, ".git")); os.IsNotExist(err) {
-		if out, err := exec.Command("git", "-C", p.repo, "init", "-q", "-b", "main").CombinedOutput(); err != nil {
-			fmt.Fprintf(os.Stderr, "hms: git init failed (%v): %s\n", err, out)
-		}
-	}
-	d := open(p)
-	d.Close()
-	fmt.Printf("memory repository: %s\nindex:             %s\n", p.repo, p.db)
-}
-
 // cachedEmbedder remembers query vectors so that a benchmark can time the recall without the model call.
 type cachedEmbedder struct {
 	inner *embed.Client
@@ -447,13 +464,13 @@ const ContextTimeout = 3 * time.Second
 
 // recallContext prints the memory block for a hook. It always returns 0: a hook must never block or fail a prompt.
 // Problems go to standard error.
-func recallContext(p paths, proj string, hook bool, query string, vectors bool) int {
+func recallContext(p paths, proj string, hook bool, query string, vectors bool, stdin io.Reader, stdout, stderr io.Writer) int {
 	if hook {
 		var in struct {
 			Prompt string `json:"prompt"`
 		}
-		if err := json.NewDecoder(io.LimitReader(os.Stdin, 4<<20)).Decode(&in); err != nil {
-			fmt.Fprintln(os.Stderr, "hms: hook payload not read:", err)
+		if err := json.NewDecoder(io.LimitReader(stdin, 4<<20)).Decode(&in); err != nil {
+			fmt.Fprintln(stderr, "hms: hook payload not read:", err)
 			return 0
 		}
 		query = in.Prompt
@@ -466,12 +483,16 @@ func recallContext(p paths, proj string, hook bool, query string, vectors bool) 
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), ContextTimeout)
 	defer cancel()
-	done := make(chan string, 1)
+	type result struct {
+		block string
+		warn  error
+	}
+	done := make(chan result, 1)
 	go func() {
 		d, err := index.OpenReadOnly(p.db)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "hms: memory unavailable:", err)
-			done <- ""
+			fmt.Fprintln(stderr, "hms: memory unavailable:", err)
+			done <- result{}
 			return
 		}
 		defer d.Close()
@@ -481,19 +502,23 @@ func recallContext(p paths, proj string, hook bool, query string, vectors bool) 
 		}
 		srv, err := server.NewReader(d, e)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "hms: memory unavailable:", err)
-			done <- ""
+			fmt.Fprintln(stderr, "hms: memory unavailable:", err)
+			done <- result{}
 			return
 		}
-		done <- srv.ContextBlock(ctx, query, proj, 2500)
+		b, w := srv.ContextBlock(ctx, query, proj, 2500)
+		done <- result{b, w}
 	}()
 	select {
-	case out := <-done:
-		if out != "" {
-			fmt.Println(out)
+	case r := <-done:
+		if r.warn != nil { // the warning never goes into the prompt block
+			fmt.Fprintln(stderr, "hms:", server.VectorsHeader(r.warn))
+		}
+		if r.block != "" {
+			fmt.Fprintln(stdout, r.block)
 		}
 	case <-ctx.Done():
-		fmt.Fprintln(os.Stderr, "hms: recall took longer than", ContextTimeout, "- skipped")
+		fmt.Fprintln(stderr, "hms: recall took longer than", ContextTimeout, "- skipped")
 	}
 	return 0
 }
