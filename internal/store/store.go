@@ -58,7 +58,13 @@ func New(repo string, db *index.DB, emb index.Embedder, commit *Committer, event
 	return &Store{Repo: repo, DB: db, Emb: emb, Commit: commit, Cap: MemoryCap, ev: ev}, nil
 }
 
-func (s *Store) Close() error { return s.ev.Close() }
+// Close makes the last commit, stops the committer and closes the event history.
+func (s *Store) Close() error {
+	if s.Commit != nil {
+		s.Commit.Stop()
+	}
+	return s.ev.Close()
+}
 
 // Event appends to events.db. Failures are ignored: history must never block a write.
 func (s *Store) Event(kind, node, project, detail string) {

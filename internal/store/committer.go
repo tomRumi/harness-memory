@@ -28,6 +28,7 @@ type Committer struct {
 	commits int
 	lastErr error
 	off     bool // not a git repository
+	stopped bool
 }
 
 func NewCommitter(repo string, quiet time.Duration) *Committer {
@@ -65,6 +66,9 @@ func (c *Committer) Notify(rels ...string) {
 func (c *Committer) armLocked(d time.Duration) {
 	if c.timer != nil {
 		c.timer.Stop()
+	}
+	if c.stopped {
+		return
 	}
 	c.timer = time.AfterFunc(d, func() { c.Flush() })
 }
@@ -223,4 +227,15 @@ func CleanTemp(repo string) {
 			return nil
 		})
 	}
+}
+
+// Stop makes the last commit now and ends the timers; nothing runs after it returns.
+func (c *Committer) Stop() {
+	c.mu.Lock()
+	c.stopped = true
+	if c.timer != nil {
+		c.timer.Stop()
+	}
+	c.mu.Unlock()
+	c.Flush()
 }
