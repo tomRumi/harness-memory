@@ -21,8 +21,6 @@ import (
 )
 
 const (
-	// MemoryCap is how many active notes one project may hold before the oldest are archived (kept, not returned).
-	MemoryCap = 50
 	// MaxNote is the longest note kept in full; longer text is cut and ends with an ellipsis.
 	MaxNote = 500
 	// GlobalProject holds what belongs to no project.
@@ -37,7 +35,6 @@ type Store struct {
 	DB     *index.DB
 	Emb    index.Embedder // nil: no embedder configured (writes then store text and skip vectors)
 	Commit *Committer
-	Cap    int
 	// OnWrite, if set, is called after a write has been indexed and embedded (the server reloads its vectors there).
 	OnWrite func()
 	mu      sync.Mutex
@@ -55,7 +52,7 @@ func New(repo string, db *index.DB, emb index.Embedder, commit *Committer, event
 	if _, err := ev.Exec(`CREATE TABLE IF NOT EXISTS events(at TEXT NOT NULL, kind TEXT NOT NULL, node_id TEXT NOT NULL, project TEXT NOT NULL, detail TEXT NOT NULL)`); err != nil {
 		return nil, err
 	}
-	return &Store{Repo: repo, DB: db, Emb: emb, Commit: commit, Cap: MemoryCap, ev: ev}, nil
+	return &Store{Repo: repo, DB: db, Emb: emb, Commit: commit, ev: ev}, nil
 }
 
 // Close makes the last commit, stops the committer and closes the event history.
@@ -235,20 +232,10 @@ func (s *Store) Learn(ctx context.Context, text, proj, kind, supersedes string) 
 			}
 		}
 	}
-	// the index must show the new note and the superseded one before the cap is counted
 	for _, r := range changed {
 		if err := s.DB.Upsert(s.Repo, r); err != nil {
 			return id + note, err
 		}
-	}
-	archived, err := s.enforceCap(proj)
-	if err != nil {
-		return id, err
-	}
-	if len(archived) > 0 {
-		changed = append(changed, archived...)
-		s.Event("archive", id, proj, fmt.Sprintf("%d oldest note(s) archived", len(archived)))
-		note += fmt.Sprintf(" || %d oldest note(s) archived (kept, no longer returned)", len(archived))
 	}
 	s.Event("learn", id, proj, kind)
 	if err := s.afterWrite(ctx, changed...); err != nil {
@@ -263,44 +250,6 @@ func shortID(nodeID string) string {
 		return b[:8]
 	}
 	return b
-}
-
-// enforceCap archives the oldest active notes of a project beyond Cap. It returns the files it changed.
-func (s *Store) enforceCap(proj string) ([]string, error) {
-	rows, err := s.DB.Query(`SELECT id, created_at FROM nodes WHERE kind='note' AND project=? AND status='active'`, proj)
-	if err != nil {
-		return nil, err
-	}
-	type n struct{ id, created string }
-	var live []n
-	for rows.Next() {
-		var x n
-		if err := rows.Scan(&x.id, &x.created); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		live = append(live, x)
-	}
-	rows.Close()
-	if len(live) <= s.Cap {
-		return nil, nil
-	}
-	sort.Slice(live, func(i, j int) bool {
-		if live[i].created != live[j].created {
-			return live[i].created < live[j].created
-		}
-		return live[i].id < live[j].id
-	})
-	over := len(live) - s.Cap
-	var changed []string
-	for _, x := range live[:over] {
-		rel := x.id + ".md"
-		if err := s.setFrontmatter(rel, map[string]any{"status": "archived"}); err != nil {
-			return changed, err
-		}
-		changed = append(changed, rel)
-	}
-	return changed, nil
 }
 
 // AddFact stores a durable fact in facts/<project>/<id>.md.
@@ -433,10 +382,9 @@ func (s *Store) Feedback(prefix string, helpful bool, proj, session string) (str
 	return fmt.Sprintf("recorded %s for %s (sessions: helpful %d, unhelpful %d)", kind, shortID(id), h, u), nil
 }
 
-// Ratings returns how many sessions rated a node helpful and unhelpful, by each session's last rating since the
-// node was last restored.
+// Ratings returns how many sessions rated a node helpful and unhelpful, by each session's last rating.
 func (s *Store) Ratings(id string) (helpful, unhelpful int) {
-	rows, err := s.ev.Query(`SELECT kind, detail FROM events WHERE node_id=? AND kind IN ('helpful','unhelpful','restore') ORDER BY rowid`, id)
+	rows, err := s.ev.Query(`SELECT kind, detail FROM events WHERE node_id=? AND kind IN ('helpful','unhelpful') ORDER BY rowid`, id)
 	if err != nil {
 		return
 	}
@@ -445,10 +393,6 @@ func (s *Store) Ratings(id string) (helpful, unhelpful int) {
 	for rows.Next() {
 		var k, d string
 		rows.Scan(&k, &d)
-		if k == "restore" {
-			last = map[string]string{} // only ratings after a restore count
-			continue
-		}
 		last[d] = k
 	}
 	for _, k := range last {

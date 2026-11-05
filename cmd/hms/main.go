@@ -19,7 +19,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/tomRumi/harness-memory-service/internal/curate"
 	"github.com/tomRumi/harness-memory-service/internal/embed"
 	"github.com/tomRumi/harness-memory-service/internal/index"
 	"github.com/tomRumi/harness-memory-service/internal/server"
@@ -36,10 +35,6 @@ usage: hms [--home DIR] [--repo DIR] [--db FILE] <command> [arguments]
   recall [-p P] [-k K,K] [-n N] [-vectors] [-json] <words...>
                                keyword recall over active nodes; -vectors (or HMS_VECTORS=1) adds the vector pass
   bench <questions.json> ...   recall latency over the questions' texts (query vector cached, then with embedding)
-  curate [-apply] [-p project]    merge notes into wiki entries (dry run unless -apply; only on the curation owner)
-  curate -pending                 ready batches as JSON for a harness that writes the sections with its own model
-  curate -submit FILE|-           check and append a section written for one pending batch
-  restore <id> [-p project]       bring back a retired, archived or superseded note
   serve [-addr A] [-vectors]  MCP over HTTP (loopback only) with seven tools: recall learn wiki_read fact_add retire feedback stats
   stats                        node counts by kind and project
   hash                         digest of everything derived from files
@@ -301,76 +296,6 @@ func main() {
 		fmt.Printf("vector matrix load (once per process): %s\n", loaded.Round(time.Millisecond))
 		fmt.Printf("recall without embedding (cached query vector): p50 %s  p95 %s  max %s\n", pct(warm, .5).Round(time.Microsecond), pct(warm, .95).Round(time.Microsecond), pct(warm, 1).Round(time.Microsecond))
 		fmt.Printf("recall with embedding of the query:             p50 %s  p95 %s  max %s\n", pct(cold, .5).Round(time.Millisecond), pct(cold, .95).Round(time.Millisecond), pct(cold, 1).Round(time.Millisecond))
-	case "curate":
-		fs := flag.NewFlagSet("curate", flag.ExitOnError)
-		apply := fs.Bool("apply", false, "do the merge (default: only report what would be merged)")
-		pending := fs.Bool("pending", false, "print the ready batches as JSON, for a harness that writes the sections itself")
-		submit := fs.String("submit", "", "file with {\"target\",\"ids\",\"section\"} written for one pending batch ('-' reads standard input)")
-		proj := fs.String("p", "", "project (default: all)")
-		fs.Parse(rest)
-		st, closeAll := openStore(p)
-		defer closeAll()
-		cfg, err := curate.LoadConfig(p.home)
-		if err != nil {
-			die("%v", err)
-		}
-		switch {
-		case *pending:
-			pb, err := curate.Pending(st, *proj)
-			if err != nil {
-				die("%v", err)
-			}
-			enc := json.NewEncoder(os.Stdout)
-			enc.SetIndent("", "  ")
-			enc.Encode(pb)
-		case *submit != "":
-			var in io.Reader = os.Stdin
-			if *submit != "-" {
-				f, err := os.Open(*submit)
-				if err != nil {
-					die("%v", err)
-				}
-				defer f.Close()
-				in = f
-			}
-			var req struct {
-				Target  string   `json:"target"`
-				IDs     []string `json:"ids"`
-				Section string   `json:"section"`
-			}
-			if err := json.NewDecoder(io.LimitReader(in, 8<<20)).Decode(&req); err != nil {
-				die("submit file not read: %v", err)
-			}
-			o, err := curate.Submit(context.Background(), st, cfg, req.Target, req.IDs, req.Section)
-			if err != nil {
-				die("%v", err)
-			}
-			fmt.Print(curate.Report{Owner: true, Applied: true, Outcomes: []curate.Outcome{o}}.Text())
-		default:
-			var mg curate.Merger
-			if l := curate.LLMFromEnv(); l != nil {
-				mg = l
-			}
-			rep, err := curate.Run(context.Background(), st, mg, cfg, *apply, *proj)
-			fmt.Print(rep.Text())
-			if err != nil {
-				die("curate: %v", err)
-			}
-		}
-	case "restore":
-		fs := flag.NewFlagSet("restore", flag.ExitOnError)
-		proj := fs.String("p", "", "project")
-		fs.Parse(rest)
-		if fs.NArg() != 1 {
-			die("usage: hms restore [-p project] <id>")
-		}
-		st, closeAll := openStore(p)
-		defer closeAll()
-		msg, err := st.Restore(context.Background(), fs.Arg(0), *proj)
-		if err != nil {
-			die("%v", err)
-		}
-		fmt.Println(msg)
 	case "serve":
 		fs := flag.NewFlagSet("serve", flag.ExitOnError)
 		addr := fs.String("addr", "127.0.0.1:8765", "listen address; must be a loopback address")
@@ -409,19 +334,6 @@ func main() {
 		srv, err := server.New(st, d, e)
 		if err != nil {
 			die("serve: %v", err)
-		}
-		if cfg, err := curate.LoadConfig(p.home); err == nil && cfg.Curation.Owner {
-			go func() { // the owner merges ready batches every ten minutes; others never do
-				for {
-					time.Sleep(10 * time.Minute)
-					rep, err := curate.Run(context.Background(), st, daemonMerger(), cfg, true, "")
-					if err != nil {
-						fmt.Fprintln(os.Stderr, "hms: curate:", err)
-					} else if rep.Merged() > 0 || len(rep.Retired) > 0 {
-						fmt.Printf("hms: curate: %d note(s) merged, %d retired\n", rep.Merged(), len(rep.Retired))
-					}
-				}
-			}()
 		}
 		hs := &http.Server{Addr: *addr, Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second}
 		go func() {
@@ -629,12 +541,4 @@ func openStore(p paths) (*store.Store, func()) {
 		die("%v", err)
 	}
 	return st, func() { st.Close(); d.Close() }
-}
-
-// daemonMerger is the configured model, or nil (batches that need a writer then wait for a harness to submit them).
-func daemonMerger() curate.Merger {
-	if l := curate.LLMFromEnv(); l != nil {
-		return l
-	}
-	return nil
 }

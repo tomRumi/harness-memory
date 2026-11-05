@@ -186,7 +186,6 @@ func TestHundredConcurrentWritesLoseNothing(t *testing.T) {
 	for err := range errs {
 		t.Errorf("write failed: %v", err)
 	}
-	// the cap archives the oldest, so count files, not active notes
 	if n := countFiles(t, filepath.Join(repo, "notes", "conc")); n != 100 {
 		t.Fatalf("%d of 100 notes on disk", n)
 	}
@@ -204,39 +203,6 @@ func TestHundredConcurrentWritesLoseNothing(t *testing.T) {
 	t.Logf("100 notes written concurrently, 0 errors, %s commit(s) (committer counted %d)", strings.TrimSpace(string(log)), st.Commit.Commits())
 	if st.Commit.Commits() < 1 {
 		t.Fatal("no commit was made")
-	}
-}
-
-func TestStagingCapArchivesTheOldestAndKeepsTheFiles(t *testing.T) {
-	st, _, repo := newStore(t)
-	st.Cap = 5
-	ctx := context.Background()
-	var ids []string
-	for i := 0; i < 8; i++ {
-		id, err := st.Learn(ctx, fmt.Sprintf("Cap test note number %d with some distinct words %d.", i, i*7), "cap", "k", "")
-		if err != nil {
-			t.Fatal(err)
-		}
-		ids = append(ids, strings.Fields(id)[0])
-		time.Sleep(2 * time.Millisecond) // created timestamps must differ
-	}
-	rows, _ := st.DB.Query(`SELECT id, status FROM nodes WHERE project='cap' ORDER BY created_at`)
-	defer rows.Close()
-	var got []string
-	for rows.Next() {
-		var id, s string
-		rows.Scan(&id, &s)
-		got = append(got, s)
-	}
-	want := []string{"archived", "archived", "archived", "active", "active", "active", "active", "active"}
-	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("statuses %v", got)
-	}
-	if n := countFiles(t, filepath.Join(repo, "notes", "cap")); n != 8 {
-		t.Fatalf("an archived note must keep its file: %d files", n)
-	}
-	if hits, _ := st.DB.Keyword("Cap test note number 0", index.Filter{Kinds: []string{"note"}}); len(hits) != 0 && hits[0].NodeID == "notes/cap/"+ids[0] {
-		t.Fatal("an archived note was returned by recall")
 	}
 }
 
@@ -380,33 +346,6 @@ func TestFirstWriteIntoAFreshRepositoryIsCommitted(t *testing.T) {
 	}
 }
 
-func TestSupersedeAtTheCapDoesNotArchiveForNothing(t *testing.T) {
-	st, _, _ := newStore(t)
-	st.Cap = 3
-	ctx := context.Background()
-	var ids []string
-	for i := 0; i < 3; i++ {
-		id, err := st.Learn(ctx, fmt.Sprintf("Distinct note number %d about the nightly job and its schedule.", i), "cap", "k", "")
-		if err != nil {
-			t.Fatal(err)
-		}
-		ids = append(ids, id)
-	}
-	// the project is at the cap; replacing one note must not archive another
-	msg, err := st.Learn(ctx, "A replacement for the first note about the nightly job and its schedule.", "cap", "k", ids[0][:8])
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(msg, "archived") {
-		t.Fatalf("a replacement at the cap archived a note: %s", msg)
-	}
-	var active int
-	st.DB.QueryRow(`SELECT count(*) FROM nodes WHERE kind='note' AND project='cap' AND status='active'`).Scan(&active)
-	if active != 3 {
-		t.Fatalf("active %d, want 3", active)
-	}
-}
-
 func TestSupersedesIsTrimmedAndNeedsEnoughOfTheId(t *testing.T) {
 	st, _, _ := newStore(t)
 	ctx := context.Background()
@@ -546,9 +485,5 @@ func TestRatingsCountSessionsNotCalls(t *testing.T) {
 	st.Feedback(id[:8], false, "fbk", "s1") // and back: the last rating of the session is what counts
 	if c := st.RetireCandidates(); len(c) != 1 {
 		t.Fatalf("last rating per session: %v", c)
-	}
-	st.Event("restore", node, "fbk", "")
-	if c := st.RetireCandidates(); len(c) != 0 {
-		t.Fatalf("ratings before a restore do not count: %v", c)
 	}
 }

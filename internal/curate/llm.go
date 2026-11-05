@@ -16,7 +16,7 @@ import (
 )
 
 // LLM calls any server that speaks the OpenAI chat-completions protocol (Ollama does, at /v1). It is optional: the
-// normal path is that a harness writes the section with its own model and submits it (see Submit). Settings come from the
+// normal path is that a harness writes the text with its own model. Settings come from the
 // environment and there are no defaults: HMS_LLM_URL and HMS_LLM_MODEL must both be set, HMS_LLM_KEY only if the server
 // needs one. A subscription login (OAuth) cannot be used here; that belongs to the harness.
 type LLM struct {
@@ -37,7 +37,7 @@ func LLMFromEnv() *LLM {
 // not stop would otherwise run until the timeout.
 const MaxTokens = 3000
 
-// timeoutFromEnv is HMS_LLM_TIMEOUT in seconds (default 180). When it runs out the notes are appended as plain bullets.
+// timeoutFromEnv is HMS_LLM_TIMEOUT in seconds (default 180).
 func timeoutFromEnv() time.Duration {
 	if v, err := strconv.Atoi(os.Getenv("HMS_LLM_TIMEOUT")); err == nil && v > 0 {
 		return time.Duration(v) * time.Second
