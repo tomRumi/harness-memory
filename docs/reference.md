@@ -106,7 +106,7 @@ The check (`curate.CheckPage`) counts and compares; it does not judge meaning:
 | each note | a run of 8 consecutive words of the note (case, punctuation and list markers ignored) is in the new body; a note under 8 words is in it whole |
 | numbers | every number of the note (list numbers at line start ignored; `80` is not `8080`) is in the section of the new body where the note's run was found |
 | links | every new `[[link]]` resolves to a page, or to a page created in the same submission (links inside code and `![[embeds]]` are not links; names compare in Unicode NFC) |
-| fences | the merge adds an even number of lines starting with ``` or ~~~ (fences the page already had are old text) |
+| fences | the merge does not leave a code fence open at the end of the page that was closed before (fences follow CommonMark: the same character to close, at least as long, at most 3 spaces of indentation) |
 | length | not shorter than the old body; at most old + 3 x the notes' length + 2,000 characters |
 
 ## Setup details
