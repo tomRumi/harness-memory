@@ -192,6 +192,10 @@ func Submit(ctx context.Context, st *store.Store, sub Submission) (Report, error
 				j.rel = "wiki/" + project + "/" + p.Title + ".md"
 			}
 			switch {
+			case !j.exists && pathTaken(repo, j.rel):
+				// the file system is the final truth for "exists": two names that fold differently in our table can
+				// still be one file for it, and a new page is never written over a file
+				j.state, j.problem = Stale, []string{"a file with this name already exists; give the base_hash of that page to change it"}
 			case p.BaseHash != "" && !j.exists:
 				j.state, j.problem = Stale, []string{"the page no longer exists"}
 			case p.BaseHash != "" && Hash(j.old) != p.BaseHash:
@@ -263,7 +267,9 @@ func Submit(ctx context.Context, st *store.Store, sub Submission) (Report, error
 			case "":
 				pr.Status = Merged
 				data, err := composePage(j, date)
-				if err != nil { // the frontmatter of the page cannot be edited: it is treated as a failed check
+				if !j.exists && pathTaken(repo, j.rel) { // an earlier page of this submission now holds that file
+					pr.Status, pr.Problems = Unsorted, []string{"another page of this submission is written to the same file"}
+				} else if err != nil { // the frontmatter of the page cannot be edited: it is treated as a failed check
 					pr.Status, pr.Problems = Unsorted, []string{err.Error()}
 				} else if err := tx.Write(j.rel, data); err != nil {
 					return err
@@ -349,6 +355,13 @@ func Submit(ctx context.Context, st *store.Store, sub Submission) (Report, error
 		}
 	}
 	return rep, nil
+}
+
+// pathTaken reports whether anything (a file, a link, a folder) is at rel. Under the write lock this is exactly "a page
+// is there", whatever its title looks like.
+func pathTaken(repo, rel string) bool {
+	_, err := os.Lstat(filepath.Join(repo, filepath.FromSlash(rel)))
+	return err == nil
 }
 
 // composePage builds the file of a passing page. The frontmatter comes from the service: a new page gets title,
