@@ -29,7 +29,7 @@ func TestSubmitHappyPathTwelveNotesIntoTwoPagesOneCommit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rep.Merged != 12 || rep.ToUnsorted != 0 || len(rep.Left) != 0 || len(rep.Unknown) != 0 || len(rep.Retired) != 0 {
+	if rep.Merged != 12 || rep.ToUnsorted != 0 || len(rep.Left) != 0 || len(rep.Unknown) != 0 {
 		t.Fatalf("report: %+v", rep)
 	}
 	for _, p := range rep.Pages {
@@ -358,7 +358,8 @@ func TestSubmitAccentedTitleAndLinkToIt(t *testing.T) {
 	}
 }
 
-func TestSubmitRatingRetirementInsideTheSameCommit(t *testing.T) {
+// Ratings only list candidates (hms curate shows them, retire deletes): a merge never deletes a note by itself.
+func TestSubmitRatingsDoNotDeleteNotes(t *testing.T) {
 	st, repo := newStore(t)
 	notes := learnN(t, st, proj, 4, tmplWorker)
 	before := commits(t, st, repo)
@@ -367,31 +368,26 @@ func TestSubmitRatingRetirementInsideTheSameCommit(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if c := st.RetireCandidates(); len(c) != 1 || c[0] != "notes/proj/"+notes[3].ID {
+		t.Fatalf("candidates %v", c)
+	}
 	rep, err := Submit(context.Background(), st, Submission{Project: proj, Pages: []Page{
 		{Title: "Some", Summary: "s", Body: bullets(notes[:2]), Notes: ids(notes[:2])},
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rep.Retired) != 1 || rep.Retired[0] != notes[3].ID {
-		t.Fatalf("retired %v", rep.Retired)
-	}
-	if len(rep.Left) != 1 || rep.Left[0] != notes[2].ID {
+	if len(rep.Left) != 2 || rep.Left[0] != notes[2].ID || rep.Left[1] != notes[3].ID {
 		t.Fatalf("left %v", rep.Left)
 	}
-	if exists(st, "notes/proj/"+notes[3].ID+".md") || !exists(st, "notes/proj/"+notes[2].ID+".md") {
-		t.Fatal("files")
+	if !exists(st, "notes/proj/"+notes[3].ID+".md") || !exists(st, "notes/proj/"+notes[2].ID+".md") {
+		t.Fatal("a rated note was deleted")
 	}
 	if commits(t, st, repo) != before+1 {
 		t.Fatal("not one commit")
 	}
-	if ns := git(t, repo, "show", "--name-status", "--format=", "HEAD"); !strings.Contains(ns, "D\tnotes/proj/"+notes[3].ID+".md") {
+	if ns := git(t, repo, "show", "--name-status", "--format=", "HEAD"); strings.Contains(ns, "D\tnotes/proj/"+notes[3].ID+".md") {
 		t.Fatal(ns)
-	}
-	var n int
-	st.DB.QueryRow(`SELECT count(*) FROM nodes WHERE id=?`, "notes/proj/"+notes[3].ID).Scan(&n)
-	if n != 0 {
-		t.Fatal("still in the index")
 	}
 }
 

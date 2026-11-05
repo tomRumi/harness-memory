@@ -142,7 +142,7 @@ func TestCurateSubmitFromFileAndStdinOneCommit(t *testing.T) {
 	if c != 0 {
 		t.Fatalf("%d\n%s\n%s", c, out, errOut)
 	}
-	for _, want := range []string{"curate proj: 2 notes merged, 1 to Unsorted, 0 left, 0 unknown, 0 retired", "merged   Ops, 2 notes", "unsorted Rules, 1 notes", "note 33333333 is not in the page"} {
+	for _, want := range []string{"curate proj: 2 notes merged, 1 to Unsorted, 0 left, 0 unknown", "merged   Ops, 2 notes", "unsorted Rules, 1 notes", "note 33333333 is not in the page"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("report lacks %q:\n%s", want, out)
 		}

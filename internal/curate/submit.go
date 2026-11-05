@@ -2,10 +2,10 @@ package curate
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -45,7 +45,6 @@ type Report struct {
 	ToUnsorted int          `json:"to_unsorted"` // notes put into Unsorted
 	Left       []string     `json:"left"`        // notes still pending: not assigned, or on a stale page
 	Unknown    []string     `json:"unknown"`     // ids that are not notes of the project
-	Retired    []string     `json:"retired"`     // notes deleted because sessions rated them unhelpful
 	Warnings   []string     `json:"warnings"`    // things worth a look that did not stop the write (a new page that copies another)
 	Commit     string       `json:"commit,omitempty"`
 }
@@ -53,7 +52,7 @@ type Report struct {
 // String is the report as text.
 func (r Report) String() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "curate %s: %d notes merged, %d to Unsorted, %d left, %d unknown, %d retired\n", r.Project, r.Merged, r.ToUnsorted, len(r.Left), len(r.Unknown), len(r.Retired))
+	fmt.Fprintf(&b, "curate %s: %d notes merged, %d to Unsorted, %d left, %d unknown\n", r.Project, r.Merged, r.ToUnsorted, len(r.Left), len(r.Unknown))
 	for _, p := range r.Pages {
 		st := p.Status
 		if st == Refused {
@@ -72,7 +71,7 @@ func (r Report) String() string {
 	for _, l := range []struct {
 		name string
 		ids  []string
-	}{{"left", r.Left}, {"unknown", r.Unknown}, {"retired", r.Retired}} {
+	}{{"left", r.Left}, {"unknown", r.Unknown}} {
 		if len(l.ids) > 0 {
 			names := make([]string, len(l.ids))
 			for i, id := range l.ids {
@@ -104,17 +103,20 @@ type pageJob struct {
 	out     []byte // the file to write
 }
 
-var reNoteID = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
-
 // Submit checks the pages of a model answer and writes them. See the design (section 3.3 and 4): the whole Submit
 // runs under the store's write lock and ends in one commit. A page that fails the check is not written; its notes go
 // to the Unsorted page as bullets. A stale page and a note that no page took stay pending.
 func Submit(ctx context.Context, st *store.Store, sub Submission) (Report, error) {
 	project := strings.TrimSpace(sub.Project)
-	rep := Report{Project: project, Pages: []PageReport{}, Left: []string{}, Unknown: []string{}, Retired: []string{}, Warnings: []string{}}
-	if project == "" || strings.ContainsAny(project, "/\\") || strings.HasPrefix(project, ".") {
+	rep := Report{Project: project, Pages: []PageReport{}, Left: []string{}, Unknown: []string{}, Warnings: []string{}}
+	if project == "" {
 		return rep, fmt.Errorf("invalid project name %q", project)
 	}
+	project, err := store.ValidProject(project) // the same rule as every other write; no wiki/PROJ is ever made
+	if err != nil {
+		return rep, err
+	}
+	rep.Project = project
 	owner := map[string]int{} // a note may be assigned to one page only
 	for i, p := range sub.Pages {
 		seen := map[string]bool{}
@@ -130,7 +132,8 @@ func Submit(ctx context.Context, st *store.Store, sub Submission) (Report, error
 			owner[id] = i
 		}
 	}
-	err := st.Do(func(tx *store.Tx) error {
+	var newPages []string // titles of the pages created, for the copy warning after the lock is released
+	err = st.Do(func(tx *store.Tx) error {
 		if tx.Busy() {
 			return fmt.Errorf("the memory repository is in the middle of a merge or rebase: nothing written, try again when it is finished")
 		}
@@ -160,7 +163,7 @@ func Submit(ctx context.Context, st *store.Store, sub Submission) (Report, error
 					continue
 				}
 				seen[id] = true
-				if n, ok := byID[id]; ok && reNoteID.MatchString(id) {
+				if n, ok := byID[id]; ok && usableID(id) {
 					j.notes = append(j.notes, n)
 					assigned[id] = true
 				} else if !unknown[id] {
@@ -173,13 +176,13 @@ func Submit(ctx context.Context, st *store.Store, sub Submission) (Report, error
 				j.state, j.problem = Refused, []string{wiki.ValidTitle(p.Title).Error()}
 			case strings.EqualFold(p.Title, UnsortedTitle):
 				j.state, j.problem = Refused, []string{`the title "Unsorted" belongs to the service`}
-			case titles[strings.ToLower(p.Title)]:
+			case titles[wiki.Fold(p.Title)]:
 				j.state, j.problem = Refused, []string{"two pages of this submission have the same title"}
 			}
 			if j.state != "" {
 				continue
 			}
-			titles[strings.ToLower(p.Title)] = true
+			titles[wiki.Fold(p.Title)] = true
 			if ref, ok := findPage(repo, project, p.Title); ok {
 				j.exists, j.title, j.rel = true, ref.Title, ref.Path
 				if j.old, err = os.ReadFile(filepath.Join(repo, filepath.FromSlash(ref.Path))); err != nil {
@@ -207,7 +210,7 @@ func Submit(ctx context.Context, st *store.Store, sub Submission) (Report, error
 		created := map[string]bool{}
 		for _, j := range jobs {
 			if j.state == "" && !j.exists {
-				created[strings.ToLower(j.title)] = true
+				created[wiki.Fold(j.title)] = true
 			}
 		}
 		resolve := func(link string) bool {
@@ -216,7 +219,7 @@ func Submit(ctx context.Context, st *store.Store, sub Submission) (Report, error
 			if i := strings.Index(l, "/"); i > 0 && strings.EqualFold(l[:i], project) {
 				l = l[i+1:]
 			}
-			if created[strings.ToLower(l)] || linkOK(link) {
+			if created[wiki.Fold(l)] || linkOK(link) {
 				return true
 			}
 			_, ok := findPage(repo, project, l) // a page on disk the index has not seen yet
@@ -242,13 +245,12 @@ func Submit(ctx context.Context, st *store.Store, sub Submission) (Report, error
 				}
 				if len(j.problem) > 0 {
 					j.state = Unsorted
-					delete(created, strings.ToLower(j.title))
+					delete(created, wiki.Fold(j.title))
 					changed = true
 				}
 			}
 		}
 
-		var mat *index.Matrix // vectors of the existing pages, loaded when the first new page is written
 		// Phase C: compose and write the passing pages, then Unsorted, then delete the notes.
 		var bullets []string
 		var gone []Note
@@ -266,9 +268,7 @@ func Submit(ctx context.Context, st *store.Store, sub Submission) (Report, error
 				} else if err := tx.Write(j.rel, data); err != nil {
 					return err
 				} else if !j.exists {
-					if w := copyWarning(ctx, st, project, j.title, &mat); w != "" {
-						rep.Warnings = append(rep.Warnings, w)
-					}
+					newPages = append(newPages, j.title)
 				}
 			case Stale:
 				rep.Left = append(rep.Left, pr.Notes...)
@@ -308,36 +308,13 @@ func Submit(ctx context.Context, st *store.Store, sub Submission) (Report, error
 			}
 		}
 
-		// Index page, rating retirement, event, one commit
+		// Index page, event, one commit
 		if len(tx.Changed()) > 0 { // a submit that wrote nothing leaves the Index alone
-			if err := tx.IndexPage(project); err != nil {
+			if err := tx.IndexPage(project); errors.Is(err, store.ErrHandWritten) {
+				rep.Warnings = append(rep.Warnings, err.Error())
+			} else if err != nil {
 				return err
 			}
-		}
-		for _, id := range st.RetireCandidates() {
-			if !strings.HasPrefix(id, "notes/"+project+"/") {
-				continue
-			}
-			if _, err := os.Stat(filepath.Join(repo, filepath.FromSlash(id)+".md")); err != nil {
-				continue
-			}
-			if err := tx.Delete(id, project, "retire", "rated unhelpful"); err != nil {
-				return err
-			}
-			rep.Retired = append(rep.Retired, filepath.Base(id))
-		}
-		if len(rep.Retired) > 0 { // a note that was just deleted is not pending any more
-			gone := map[string]bool{}
-			for _, id := range rep.Retired {
-				gone[id] = true
-			}
-			left := rep.Left[:0]
-			for _, id := range rep.Left {
-				if !gone[id] {
-					left = append(left, id)
-				}
-			}
-			rep.Left = left
 		}
 		mergedPages := 0
 		for _, p := range rep.Pages {
@@ -346,7 +323,7 @@ func Submit(ctx context.Context, st *store.Store, sub Submission) (Report, error
 			}
 		}
 		rep.Commit = fmt.Sprintf("curate %s: %d notes into %d pages (%d to Unsorted)", project, rep.Merged, mergedPages, rep.ToUnsorted)
-		st.Event("curate", "", project, fmt.Sprintf("merged=%d pages=%d unsorted=%d left=%d unknown=%d retired=%d", rep.Merged, mergedPages, rep.ToUnsorted, len(rep.Left), len(rep.Unknown), len(rep.Retired)))
+		st.Event("curate", "", project, fmt.Sprintf("merged=%d pages=%d unsorted=%d left=%d unknown=%d", rep.Merged, mergedPages, rep.ToUnsorted, len(rep.Left), len(rep.Unknown)))
 		msg := rep.Commit
 		if len(gone) > 0 {
 			ids := make([]string, len(gone))
@@ -358,7 +335,16 @@ func Submit(ctx context.Context, st *store.Store, sub Submission) (Report, error
 		tx.Finish(ctx, msg)
 		return nil
 	})
-	return rep, err
+	if err != nil {
+		return rep, err
+	}
+	var mat *index.Matrix // vectors of the existing pages, loaded for the first new page
+	for _, title := range newPages {
+		if w := copyWarning(ctx, st, project, title, &mat); w != "" {
+			rep.Warnings = append(rep.Warnings, w)
+		}
+	}
+	return rep, nil
 }
 
 // composePage builds the file of a passing page. The frontmatter comes from the service: a new page gets title,
@@ -449,14 +435,14 @@ func union(a, b []string) []string {
 	return out
 }
 
-// copyWarning says so when the new page title (just written and indexed, not yet embedded) has a page vector within
+// copyWarning (run after the write lock is released, with the embedding timeout of the store) says so when the new page title (just written and indexed, not yet embedded) has a page vector within
 // index.DuplicateThreshold of another page of the project. It is only advice: any failure to compute it gives "".
 func copyWarning(ctx context.Context, st *store.Store, project, title string, mat **index.Matrix) string {
 	if st.Emb == nil {
 		return ""
 	}
 	id := "wiki/" + project + "/" + title
-	ctx, cancel := context.WithTimeout(ctx, index.NodeVectorTimeout)
+	ctx, cancel := context.WithTimeout(ctx, store.EmbedTimeout)
 	defer cancel()
 	v, err := st.DB.NodeVector(ctx, st.Emb, id)
 	if err != nil {

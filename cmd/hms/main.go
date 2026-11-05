@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -346,7 +347,7 @@ func main() {
 		var emb *embed.Client
 		if *withVec {
 			emb = embed.New(embed.Default())
-			hc, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			hc, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			if _, err := emb.Health(hc); err != nil {
 				fmt.Fprintf(os.Stderr, "hms: vectors unavailable (%v): starting with keyword match only; writes still work, and the service embeds what is missing once the embedder answers\n", err)
 			}
@@ -459,6 +460,14 @@ func wikiCmd(p paths, args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
 	}
+	if *proj != "" {
+		pn, err := store.ValidProject(*proj)
+		if err != nil {
+			fmt.Fprintf(stderr, "hms: %v\n", err)
+			return 2
+		}
+		*proj = pn
+	}
 	d, err := index.Open(p.db)
 	if err != nil {
 		fmt.Fprintf(stderr, "hms: open index %s: %v\n", p.db, err)
@@ -511,6 +520,8 @@ func wikiCmd(p paths, args []string, stdout, stderr io.Writer) int {
 		rel := "wiki/" + pr + "/Index.md"
 		wrote, err := st.WriteIndexPage(context.Background(), pr)
 		switch {
+		case errors.Is(err, store.ErrHandWritten):
+			fmt.Fprintf(stdout, "%s: %v\n", rel, err)
 		case err != nil:
 			fmt.Fprintf(stderr, "hms: %s: %v\n", rel, err)
 			status = 1
@@ -545,6 +556,14 @@ func curateCmd(p paths, args []string, stdin io.Reader, stdout, stderr io.Writer
 		fmt.Fprintln(stderr, "usage: hms curate | hms curate -pending [-p P] [-max N] | hms curate -submit FILE|- [-p P] | hms curate -apply [-p P] [-max N]")
 		return 2
 	}
+	if *proj != "" { // the same rule as the store: lower-case names; no wiki/PROJ is ever made
+		pn, err := store.ValidProject(*proj)
+		if err != nil {
+			fmt.Fprintf(stderr, "hms: %v\n", err)
+			return 2
+		}
+		*proj = pn
+	}
 	if modes == 0 { // read only: files, no index
 		ws, err := curate.WaitingNotes(p.repo)
 		if err != nil {
@@ -556,6 +575,19 @@ func curateCmd(p paths, args []string, stdin io.Reader, stdout, stderr io.Writer
 		}
 		for _, w := range ws {
 			fmt.Fprintln(stdout, w)
+		}
+		if n := curate.SkippedNotes(p.repo, *proj); n > 0 {
+			fmt.Fprintf(stdout, "%d note files have a name that cannot be a note id (a slash, a backslash or a control character) and are skipped\n", n)
+		}
+		if ev, err := store.New(p.repo, nil, nil, nil, filepath.Join(p.home, "events.db")); err == nil {
+			if ids := ev.RetireCandidates(); len(ids) > 0 {
+				names := make([]string, len(ids))
+				for i, id := range ids {
+					names[i] = filepath.Base(id)
+				}
+				fmt.Fprintf(stdout, "rated unhelpful by %d sessions, none helpful: %s\n", store.RetireAfter, strings.Join(names, " "))
+			}
+			ev.Close()
 		}
 		return 0
 	}

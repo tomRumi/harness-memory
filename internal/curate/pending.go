@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/tomRumi/harness-memory-service/internal/index"
 	"github.com/tomRumi/harness-memory-service/internal/md"
@@ -67,6 +68,40 @@ type waitingNote struct {
 	created time.Time
 }
 
+// usableID says whether a note file stem can be a note id: not empty, not hidden, and without a path separator or a
+// control character. Pending and Submit use this one rule, so a note that is handed out can be taken back.
+func usableID(stem string) bool {
+	if stem == "" || strings.HasPrefix(stem, ".") || strings.ContainsAny(stem, "/\\") {
+		return false
+	}
+	for _, r := range stem {
+		if unicode.IsControl(r) {
+			return false
+		}
+	}
+	return true
+}
+
+// SkippedNotes counts the note files of a project (any project when empty) whose name cannot be a note id. They are
+// not handed out and not merged; the owner renames them.
+func SkippedNotes(repo, project string) int {
+	n := 0
+	projects := noteProjects(repo)
+	if project != "" {
+		projects = []string{project}
+	}
+	for _, p := range projects {
+		ents, _ := os.ReadDir(filepath.Join(repo, "notes", p))
+		for _, e := range ents {
+			name := e.Name()
+			if !e.IsDir() && strings.HasSuffix(name, ".md") && !strings.HasPrefix(name, ".") && !usableID(strings.TrimSuffix(name, ".md")) {
+				n++
+			}
+		}
+	}
+	return n
+}
+
 // readNotes lists the notes of a project with a text, oldest first (frontmatter created, then id).
 func readNotes(repo, project string) ([]waitingNote, error) {
 	dir := filepath.Join(repo, "notes", project)
@@ -81,6 +116,9 @@ func readNotes(repo, project string) ([]waitingNote, error) {
 	for _, e := range ents {
 		name := e.Name()
 		if e.IsDir() || !strings.HasSuffix(name, ".md") || strings.HasPrefix(name, ".") {
+			continue
+		}
+		if !usableID(strings.TrimSuffix(name, ".md")) {
 			continue
 		}
 		raw, err := os.ReadFile(filepath.Join(dir, name))
@@ -183,12 +221,12 @@ func pageFiles(repo, project string) ([]PageRef, error) {
 	return out, err
 }
 
-// findPage returns the page of the project whose title is title, ignoring case (a file system may not tell
-// "Ports" from "ports" either).
+// findPage returns the page of the project whose title is title, ignoring case and Unicode normalisation (a file
+// system may not tell "Ports" from "ports", or an accent written in one piece from the same written in two).
 func findPage(repo, project, title string) (PageRef, bool) {
 	ps, _ := pageFiles(repo, project)
 	for _, p := range ps {
-		if strings.EqualFold(p.Title, title) {
+		if wiki.Fold(p.Title) == wiki.Fold(title) {
 			return p, true
 		}
 	}
@@ -219,7 +257,11 @@ func Pending(ctx context.Context, st *store.Store, project string, max int) ([]B
 	}
 	projects := noteProjects(st.Repo)
 	if project != "" {
-		projects = []string{project}
+		p, err := store.ValidProject(project)
+		if err != nil {
+			return nil, err
+		}
+		projects = []string{p}
 	}
 	var out []Batch
 	for _, p := range projects {
