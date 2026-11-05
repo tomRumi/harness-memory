@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/tomRumi/harness-memory-service/internal/curate"
 	"github.com/tomRumi/harness-memory-service/internal/embed"
 	"github.com/tomRumi/harness-memory-service/internal/index"
 	"github.com/tomRumi/harness-memory-service/internal/install"
@@ -40,6 +41,10 @@ usage: hms [--home DIR] [--repo DIR] [--db FILE] <command> [arguments]
   serve [-addr A] [-vectors=false]  MCP over HTTP (loopback only) with seven tools: recall learn wiki_read fact_add retire feedback stats
   wiki links [-p P]            list broken and ambiguous [[links]] of wiki pages (one line each, then a summary); exit 0
   wiki index [-p P]            write wiki/<project>/Index.md (all projects without -p) when its content changed, and commit it
+  curate                       notes waiting per project and the age of the oldest (read only)
+  curate -pending [-p P] [-max N]  the batches to merge as JSON: notes, page titles, related pages, instructions
+  curate -submit FILE|- [-p P] check and write the pages of a model answer; one commit; exit 1 on error
+  curate -apply [-p P] [-max N]    the same with the built-in model (HMS_LLM_URL, HMS_LLM_MODEL)
   stats                        node counts by kind and project, and the vector state
   hash                         digest of everything derived from files
   digests                      one digest per node, as JSON
@@ -388,6 +393,8 @@ func main() {
 		<-catchDone
 	case "wiki":
 		os.Exit(wikiCmd(p, rest, os.Stdout, os.Stderr))
+	case "curate":
+		os.Exit(curateCmd(p, rest, os.Stdin, os.Stdout, os.Stderr))
 	case "stats":
 		d := open(p)
 		defer d.Close()
@@ -508,6 +515,136 @@ func wikiCmd(p paths, args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	return status
+}
+
+// curateCmd runs `hms curate`. It returns the exit status.
+func curateCmd(p paths, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("curate", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	pending := fs.Bool("pending", false, "print the batches to merge as JSON")
+	submit := fs.String("submit", "", "read a submission (or a model answer with -p) from FILE, or - for standard input, check it and write it")
+	apply := fs.Bool("apply", false, "merge with the built-in model")
+	proj := fs.String("p", "", "project (default: all projects; required for a bare answer given to -submit)")
+	max := fs.Int("max", curate.DefaultMax, "notes per project per run")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	modes := 0
+	for _, on := range []bool{*pending, *submit != "", *apply} {
+		if on {
+			modes++
+		}
+	}
+	if modes > 1 || fs.NArg() > 0 {
+		fmt.Fprintln(stderr, "usage: hms curate | hms curate -pending [-p P] [-max N] | hms curate -submit FILE|- [-p P] | hms curate -apply [-p P] [-max N]")
+		return 2
+	}
+	if modes == 0 { // read only: files, no index
+		ws, err := curate.WaitingNotes(p.repo)
+		if err != nil {
+			fmt.Fprintf(stderr, "hms: %v\n", err)
+			return 1
+		}
+		if len(ws) == 0 {
+			fmt.Fprintln(stdout, "no notes waiting")
+		}
+		for _, w := range ws {
+			fmt.Fprintln(stdout, w)
+		}
+		return 0
+	}
+	var llm *curate.LLM
+	if *apply {
+		if llm = curate.LLMFromEnv(); llm == nil {
+			fmt.Fprintln(stderr, "no model configured (HMS_LLM_URL, HMS_LLM_MODEL): use -pending and -submit from a harness job")
+			return 1
+		}
+	}
+	var text string
+	if *submit != "" {
+		var raw []byte
+		var err error
+		if *submit == "-" {
+			raw, err = io.ReadAll(io.LimitReader(stdin, 32<<20))
+		} else {
+			raw, err = os.ReadFile(*submit)
+		}
+		if err != nil {
+			fmt.Fprintf(stderr, "hms: %v\n", err)
+			return 1
+		}
+		text = string(raw)
+	}
+	d, err := index.Open(p.db)
+	if err != nil {
+		fmt.Fprintf(stderr, "hms: open index %s: %v\n", p.db, err)
+		return 1
+	}
+	defer d.Close()
+	res, err := d.Rescan(p.repo) // the index must match the files: related pages and links are read from it
+	if err != nil {
+		fmt.Fprintf(stderr, "hms: rescan: %v\n", err)
+		return 1
+	}
+	for _, w := range res.Warnings {
+		fmt.Fprintln(stderr, "warning:", w)
+	}
+	var e index.Embedder
+	if install.VectorsEnabled() {
+		e = embed.New(embed.Default())
+	}
+	st, err := store.New(p.repo, d, e, store.NewCommitter(p.repo, 3*time.Second), filepath.Join(p.home, "events.db"))
+	if err != nil {
+		fmt.Fprintf(stderr, "hms: %v\n", err)
+		return 1
+	}
+	defer st.Close() // makes the commit
+	ctx := context.Background()
+	switch {
+	case *pending:
+		bs, err := curate.Pending(ctx, st, *proj, *max)
+		if err != nil {
+			fmt.Fprintf(stderr, "hms: %v\n", err)
+			return 1
+		}
+		if bs == nil {
+			bs = []curate.Batch{}
+		}
+		out, _ := json.MarshalIndent(bs, "", "  ")
+		fmt.Fprintln(stdout, string(out))
+	case *submit != "":
+		sub, err := curate.ParseSubmission(text, *proj)
+		if err != nil {
+			fmt.Fprintf(stderr, "hms: %v\n", err)
+			return 1
+		}
+		rep, err := curate.Submit(ctx, st, sub)
+		if err != nil {
+			fmt.Fprintf(stderr, "hms: %v\n", err)
+			return 1
+		}
+		fmt.Fprint(stdout, rep)
+	default: // apply
+		results, err := curate.Apply(ctx, st, llm, *proj, *max)
+		if err != nil {
+			fmt.Fprintf(stderr, "hms: %v\n", err)
+			return 1
+		}
+		if len(results) == 0 {
+			fmt.Fprintln(stdout, "no notes waiting")
+		}
+		status := 0
+		for _, r := range results {
+			if r.Err != nil {
+				fmt.Fprintf(stderr, "hms: %s: notes left pending: %v\n", r.Project, r.Err)
+				status = 1
+				continue
+			}
+			fmt.Fprint(stdout, r.Report)
+		}
+		return status
+	}
+	return 0
 }
 
 func open(p paths) *index.DB {
