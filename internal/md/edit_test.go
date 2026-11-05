@@ -61,3 +61,17 @@ func TestSetKeysMultiLineValuesAndQuotedKeys(t *testing.T) {
 		t.Fatalf("%q %+v", out, d)
 	}
 }
+
+func TestSetKeysWritesAListAsAFlowList(t *testing.T) {
+	src := "---\ntitle: T\ntags: [old]\nnote: keep # me\n---\n\nBody.\n"
+	out, err := SetKeys([]byte(src), map[string]any{"tags": []string{"old", "new tag", "ü"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "---\ntitle: T\ntags: [\"old\",\"new tag\",\"ü\"]\nnote: keep # me\n---\n\nBody.\n"; string(out) != want {
+		t.Fatalf("got %q", out)
+	}
+	if got := Parse(out).List("tags"); len(got) != 3 || got[1] != "new tag" || got[2] != "ü" {
+		t.Fatalf("parsed back %v", got)
+	}
+}

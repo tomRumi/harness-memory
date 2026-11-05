@@ -22,6 +22,7 @@ type Committer struct {
 	mu      sync.Mutex       // guards the fields below; never held while git runs
 	runMu   sync.Mutex       // one flush at a time
 	paths   map[string]int64 // path -> number of the last Notify that named it
+	msg     string           // commit message given by the last Notify that carried one; empty: the default
 	seq     int64
 	timer   *time.Timer
 	backoff time.Duration
@@ -50,9 +51,16 @@ func (c *Committer) Commits() int { c.mu.Lock(); defer c.mu.Unlock(); return c.c
 func (c *Committer) LastErr() error { c.mu.Lock(); defer c.mu.Unlock(); return c.lastErr }
 
 // Notify records the files (paths relative to the repository) that changed and schedules a commit.
-func (c *Committer) Notify(rels ...string) {
+func (c *Committer) Notify(rels ...string) { c.NotifyMsg("", rels...) }
+
+// NotifyMsg is Notify with a commit message. When several Notify calls fall into one commit, the message of the last
+// call that carried one is used; with none the message is "memory: N change(s)".
+func (c *Committer) NotifyMsg(msg string, rels ...string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if msg != "" {
+		c.msg = msg
+	}
 	for _, r := range rels {
 		c.seq++
 		c.paths[filepath.ToSlash(r)] = c.seq
@@ -136,10 +144,11 @@ func (c *Committer) Flush() {
 		snap = append(snap, p)
 		seen[p] = n
 	}
+	msg := c.msg
 	c.mu.Unlock()
 	sort.Strings(snap)
 
-	err := c.commit(snap)
+	err := c.commit(snap, msg)
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -153,6 +162,9 @@ func (c *Committer) Flush() {
 		}
 	}
 	c.backoff, c.lastErr = 0, nil
+	if c.msg == msg {
+		c.msg = ""
+	}
 	if len(c.paths) > 0 {
 		c.armLocked(c.quiet)
 	}
@@ -160,7 +172,7 @@ func (c *Committer) Flush() {
 
 // commit stages the given paths and commits them. A tracked path that no longer exists is staged as a deletion. Only
 // notes, facts and wiki entries are ever named. It returns nil when there was nothing to commit.
-func (c *Committer) commit(snap []string) error {
+func (c *Committer) commit(snap []string, msg string) error {
 	var add, gone []string
 	for _, p := range snap {
 		if !strings.HasPrefix(p, "notes/") && !strings.HasPrefix(p, "facts/") && !strings.HasPrefix(p, "wiki/") {
@@ -202,7 +214,9 @@ func (c *Committer) commit(snap []string) error {
 			return fmt.Errorf("not committing: %q is staged and is not a note, a fact or a wiki entry", f)
 		}
 	}
-	msg := fmt.Sprintf("memory: %d change(s)", len(snap))
+	if msg == "" {
+		msg = fmt.Sprintf("memory: %d change(s)", len(snap))
+	}
 	if out, err := c.git("-c", "user.name=hms", "-c", "user.email=hms@localhost", "commit", "-q", "-m", msg); err != nil {
 		return fmt.Errorf("git commit: %v: %s", err, out)
 	}

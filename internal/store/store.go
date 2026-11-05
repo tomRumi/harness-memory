@@ -126,8 +126,15 @@ func (s *Store) afterWrite(ctx context.Context, rels ...string) error {
 			return err
 		}
 	}
+	s.finish(ctx, "", rels...)
+	return nil
+}
+
+// finish tells the committer about files whose index entries are already up to date (msg: the commit message, empty
+// for the default), then embeds what is new, best effort, and calls OnWrite.
+func (s *Store) finish(ctx context.Context, msg string, rels ...string) {
 	if s.Commit != nil {
-		s.Commit.Notify(rels...)
+		s.Commit.NotifyMsg(msg, rels...)
 	}
 	if s.Emb != nil {
 		ectx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -140,7 +147,6 @@ func (s *Store) afterWrite(ctx context.Context, rels ...string) error {
 	if s.OnWrite != nil {
 		s.OnWrite()
 	}
-	return nil
 }
 
 // EmbedError is the error of the last embedding attempt after a write; nil when it worked or none was made.
@@ -295,11 +301,10 @@ func (s *Store) Retire(ctx context.Context, prefix, reason, proj string) (string
 	if r := []rune(reason); len(r) > 200 {
 		reason = string(r[:200])
 	}
-	rel := id + ".md"
-	if err := os.Remove(filepath.Join(s.Repo, filepath.FromSlash(rel))); err != nil && !os.IsNotExist(err) {
+	rel, err := s.removeNode(id, p, "retire", reason)
+	if err != nil {
 		return "", err
 	}
-	s.Event("retire", id, p, reason)
 	if err := s.afterWrite(ctx, rel); err != nil {
 		return "", err
 	}
@@ -308,6 +313,19 @@ func (s *Store) Retire(ctx context.Context, prefix, reason, proj string) (string
 		out += " (" + truncate(reason, 80) + ")"
 	}
 	return out, nil
+}
+
+// removeNode deletes the file of a note or fact and records the event (none when event is empty); the index and the committer are not told.
+// The caller holds s.mu.
+func (s *Store) removeNode(id, project, event, detail string) (rel string, err error) {
+	rel = id + ".md"
+	if err := os.Remove(filepath.Join(s.Repo, filepath.FromSlash(rel))); err != nil && !os.IsNotExist(err) {
+		return "", err
+	}
+	if event != "" {
+		s.Event(event, id, project, detail)
+	}
+	return rel, nil
 }
 
 func truncate(s string, n int) string {
@@ -503,22 +521,33 @@ func (s *Store) linksFooter(id string) string {
 // WriteIndexPage regenerates wiki/<project>/Index.md from the pages in the index. The file is written (atomically)
 // only when its content would change; the index is updated and the committer is told. It reports whether it wrote.
 func (s *Store) WriteIndexPage(ctx context.Context, proj string) (bool, error) {
-	if proj == "" || strings.ContainsAny(proj, "/\\") || strings.HasPrefix(proj, ".") {
-		return false, fmt.Errorf("invalid project name %q", proj)
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	rel, wrote, err := s.writeIndexPageLocked(proj)
+	if err != nil || !wrote {
+		return false, err
+	}
+	s.finish(ctx, "", rel)
+	return true, nil
+}
+
+// writeIndexPageLocked writes the index page when its content changed and updates the index entry, without telling
+// the committer. The caller holds s.mu.
+func (s *Store) writeIndexPageLocked(proj string) (rel string, wrote bool, err error) {
+	if proj == "" || strings.ContainsAny(proj, "/\\") || strings.HasPrefix(proj, ".") {
+		return "", false, fmt.Errorf("invalid project name %q", proj)
+	}
 	content, err := s.DB.BuildIndexPage(proj)
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
-	rel := "wiki/" + proj + "/" + wiki.IndexTitle + ".md"
+	rel = "wiki/" + proj + "/" + wiki.IndexTitle + ".md"
 	full := filepath.Join(s.Repo, filepath.FromSlash(rel))
 	if old, err := os.ReadFile(full); err == nil && string(old) == content {
-		return false, nil
+		return rel, false, nil
 	}
 	if err := writeFile(full, []byte(content)); err != nil {
-		return false, err
+		return "", false, err
 	}
-	return true, s.afterWrite(ctx, rel)
+	return rel, true, s.DB.Upsert(s.Repo, rel)
 }

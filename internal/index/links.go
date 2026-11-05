@@ -166,6 +166,16 @@ func (d *DB) ResolveTitle(name string) (id string, matches []string, err error) 
 	return "", m, nil
 }
 
+// LinkResolver returns a function that says whether a link written in a page of project leads to exactly one
+// existing page (an ambiguous link does not). It reads the pages of the index once.
+func (d *DB) LinkResolver(project string) (func(link string) bool, error) {
+	r, err := loadResolver(d)
+	if err != nil {
+		return nil, err
+	}
+	return func(link string) bool { st, _, _ := r.resolve(project, link); return st == linkOK }, nil
+}
+
 // LinkProblem is one link of a wiki page that does not lead to exactly one page.
 type LinkProblem struct {
 	Project string

@@ -1,6 +1,8 @@
 package md
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"sort"
@@ -9,7 +11,7 @@ import (
 
 var plainScalar = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.:/-]*$`)
 
-// scalar renders a value for a frontmatter line: plain when that is safe and unambiguous, otherwise double-quoted
+// scalar renders a value for a frontmatter line (a []string as a flow list): plain when that is safe and unambiguous, otherwise double-quoted
 // (JSON string syntax is valid YAML). A string that looks like a number, a boolean or null is quoted so it stays a string.
 func scalar(v any) string {
 	switch x := v.(type) {
@@ -20,6 +22,12 @@ func scalar(v any) string {
 		return fmt.Sprintf("%q", x)
 	case bool:
 		return fmt.Sprint(x)
+	case []string: // a flow list; JSON strings are valid YAML
+		var b bytes.Buffer
+		enc := json.NewEncoder(&b)
+		enc.SetEscapeHTML(false)
+		enc.Encode(x)
+		return strings.TrimSpace(b.String())
 	default:
 		return fmt.Sprint(x)
 	}
