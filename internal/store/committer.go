@@ -91,22 +91,13 @@ func (c *Committer) Detached() bool {
 	if c.off {
 		return false
 	}
-	_, err := c.git("symbolic-ref", "-q", "HEAD")
-	return err != nil
+	return detached(c.repo)
 }
 
 // Busy reports whether git is in the middle of a merge or a rebase.
 func (c *Committer) Busy() bool { c.mu.Lock(); defer c.mu.Unlock(); return c.busyLocked() }
 
-func (c *Committer) busyLocked() bool {
-	g := filepath.Join(c.repo, ".git")
-	for _, f := range []string{"MERGE_HEAD", "rebase-merge", "rebase-apply", "CHERRY_PICK_HEAD"} {
-		if _, err := os.Stat(filepath.Join(g, f)); err == nil {
-			return true
-		}
-	}
-	return false
-}
+func (c *Committer) busyLocked() bool { return mergeInProgress(c.repo) }
 
 // GitTimeout bounds every git call. A hung hook or a signing prompt must not hold up the service.
 const GitTimeout = 30 * time.Second
@@ -248,11 +239,9 @@ func (c *Committer) commit(snap []string, msg string) (err error) {
 	if staged == "" {
 		return nil
 	}
-	for _, f := range strings.Split(staged, "\x00") {
-		if f != "" && !wiki.InTree(f) {
-			// the owner has staged something else; committing now would sweep it into a memory commit
-			return fmt.Errorf("not committing: %q is staged and is not a note, a fact or a wiki entry", f)
-		}
+	if foreign := foreignStaged(staged); len(foreign) > 0 {
+		// the owner has staged something else; committing now would sweep it into a memory commit
+		return fmt.Errorf("not committing: %q is staged and is not a note, a fact or a wiki entry", foreign[0])
 	}
 	if msg == "" {
 		msg = fmt.Sprintf("memory: %d change(s)", len(snap))

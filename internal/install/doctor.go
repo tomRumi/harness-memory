@@ -13,7 +13,6 @@ import (
 	"github.com/tomRumi/harness-memory-service/internal/embed"
 	"github.com/tomRumi/harness-memory-service/internal/index"
 	"github.com/tomRumi/harness-memory-service/internal/store"
-	"github.com/tomRumi/harness-memory-service/internal/wiki"
 )
 
 // Doctor runs the checks, prints one line each (OK, WARN or FAIL) and changes nothing. It returns the number of FAILs.
@@ -140,44 +139,21 @@ func doctorEmbedder(db *index.DB, line func(level, what, detail string)) {
 	}
 }
 
-func gitFails(repo string, args ...string) bool {
-	_, err := store.Git(repo, args...)
-	return err != nil
-}
-
 // doctorRepoState checks what a running service would also see: no merge or rebase under way and nothing foreign
 // staged. The last commit error of a running service is shown by its stats tool.
 func doctorRepoState(repo string, line func(level, what, detail string)) {
-	g := filepath.Join(repo, ".git")
-	if fi, err := os.Stat(filepath.Join(g, "index.lock")); err == nil {
-		age := time.Since(fi.ModTime()).Round(time.Second)
-		line("WARN", "commits", fmt.Sprintf(".git/index.lock exists (%s old): every commit is blocked until it is removed; if no git program is running, delete that file", age))
-		return
-	}
-	for _, f := range []string{"MERGE_HEAD", "rebase-merge", "rebase-apply", "CHERRY_PICK_HEAD"} {
-		if _, err := os.Stat(filepath.Join(g, f)); err == nil {
-			line("WARN", "commits", "the repository is in the middle of a merge or rebase; commits pause until it is finished")
-			return
-		}
-	}
-	if _, err := os.Stat(g); err == nil && gitFails(repo, "symbolic-ref", "-q", "HEAD") {
+	switch st := store.State(repo); {
+	case st.IndexLock:
+		line("WARN", "commits", fmt.Sprintf(".git/index.lock exists (%s old): every commit is blocked until it is removed; if no git program is running, delete that file", st.IndexLockAge))
+	case st.MergeOrRebase:
+		line("WARN", "commits", "the repository is in the middle of a merge or rebase; commits pause until it is finished")
+	case st.Detached:
 		line("WARN", "commits", "HEAD is detached; commits pause until a branch is checked out")
-		return
+	case st.Err != nil:
+		line("FAIL", "commits", "git diff --cached failed: "+st.Err.Error())
+	case len(st.Foreign) > 0:
+		line("WARN", "commits", fmt.Sprintf("%q is staged and is not a note, fact or wiki entry; commits wait until it is committed or unstaged", st.Foreign[0]))
+	default:
+		line("OK", "commits", "repository state fine (no merge or rebase, nothing foreign staged)")
 	}
-	out, err := store.Git(repo, "diff", "--cached", "--name-only", "-z")
-	if err != nil {
-		line("FAIL", "commits", "git diff --cached failed: "+err.Error())
-		return
-	}
-	var foreign []string
-	for _, f := range strings.Split(out, "\x00") {
-		if f != "" && !wiki.InTree(f) {
-			foreign = append(foreign, f)
-		}
-	}
-	if len(foreign) > 0 {
-		line("WARN", "commits", fmt.Sprintf("%q is staged and is not a note, fact or wiki entry; commits wait until it is committed or unstaged", foreign[0]))
-		return
-	}
-	line("OK", "commits", "repository state fine (no merge or rebase, nothing foreign staged)")
 }
