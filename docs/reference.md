@@ -12,7 +12,7 @@ Commands, file formats, the merge check and settings. For what the service is an
   afterwards in the background (5 second limit, outside the write lock), and `stats` shows `vectors: unavailable: <reason>` until it works again.
 - `retire` and `learn(supersedes=id)` delete the note or fact file. The deletion is committed; git history keeps the
   text, so a deleted note can be recovered with `git checkout`.
-- One committer per process makes the commits (`hms serve` and each `hms curate` or `hms wiki index` run have their own; the lock file keeps their writes apart, and every writing command first commits the leftovers of an interrupted run that it can see: new, changed, deleted or staged files; a commit that fails is reported as `committed: NO (...)` with exit status 1, and `hms doctor` shows a blocked repository, for example a stale `.git/index.lock`): after a quiet moment, never during a merge or rebase, never when you have staged
+- One committer per process makes the commits (`hms serve` and each `hms curate` or `hms wiki index` run have their own; the lock file keeps their writes apart, and every writing command first commits the leftovers of an interrupted run that it can see: new, changed, deleted or staged files; a commit that fails is reported as `committed: NO (...)` with exit status 1, and `hms doctor` shows a merge or rebase in progress, a detached HEAD, an index.lock, foreign staged files, project folders with capital letters and memory folders that git ignores; a signing or hook failure is shown by the error the command prints; after `git add` the committer checks that git staged every file it named, and a project folder with capital letters, such as `wiki/MyProj`, makes every write refuse before anything changes, with the instruction to `git mv` it to lower case and run `hms rescan`): after a quiet moment, never during a merge or rebase, never when you have staged
   something else, and it retries after a failure.
 - `feedback` records helpful or unhelpful ratings per session; a note that five different sessions rated unhelpful
   (and none helpful) is listed as a candidate: `hms curate` prints `rated unhelpful by 5 sessions, none helpful: <ids>`. Only `retire` deletes.
@@ -42,8 +42,8 @@ Text with [[Another Page]], [[Another Page|shown text]], [[Another Page#Heading]
   character, no leading dot, no leading or trailing space, at most 200 bytes of UTF-8 (a file name is limited in bytes), and neither
   `Index` nor `Unsorted` (both are pages of the service).
 - **Titles are compared case-insensitively and Unicode-normalised:** Unicode NFC, then full
-  case folding. Two names that the file system treats as one are refused as well (a new page is never written over a
-  file that exists). `Café` written in one piece or two, `Ports` and `ports`, `Strasse` and `Straße`, `ΟΔΟΣ` and `οδος`,
+  case folding. A name that the file system treats as an existing file is stale, not refused: the notes stay pending (a new
+  page is never written over a file that exists). `Café` written in one piece or two, `Ports` and `ports`, `Strasse` and `Straße`, `ΟΔΟΣ` and `οδος`,
   `file` and `ﬁle` name the same page. A new page whose title folds to an existing page is that page (it needs the
   page's `base_hash`); two titles of one submission that fold equal are one page, and the second goes to Unsorted.
 - **Links** resolve as in Obsidian: by file name or alias, ignoring case; the same project first, otherwise any
@@ -56,7 +56,7 @@ Text with [[Another Page]], [[Another Page|shown text]], [[Another Page#Heading]
 - `hms wiki index [-p project]` writes `wiki/<project>/Index.md` (`generated: true`): one line
   `- [[Title]] - <summary or first sentence>` per page, sorted by title, never listing itself. The file is written and
   committed only when its content changed. It is a normal page for search.
-- **Meaning-based features** use the stored vectors (run `hms embed` first; the embedder is never called). A page's
+- **Meaning-based features** use the stored vectors (run `hms embed` first; the embedder is not called, except by the copy warning of a merge, which asks it with a 5 second limit). A page's
   vector is the normalised mean of its chunk vectors; Index and Unsorted pages are left out of every list.
   `hms wiki related <title or path> [-n 5] [-p P]` prints `score  [[Title]]  summary` for the closest pages;
   `wiki_read` adds `Related: [[A]] (0.81), [[B]] (0.77)` (top 5 at or above `index.RelatedFloor`; omitted without

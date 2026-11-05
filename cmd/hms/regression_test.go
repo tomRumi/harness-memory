@@ -330,6 +330,17 @@ func TestRecipeStopsOnADivergedOrConflictedPull(t *testing.T) {
 			t.Errorf("%s still overclaims the title comparison", name)
 		}
 	}
+	for name, text := range map[string]string{"design": design, "recipe": recipe, "reference": read("docs/reference.md")} {
+		if strings.Contains(text, "shows a blocked repository") {
+			t.Errorf("%s still says doctor shows a blocked repository after a failed commit", name)
+		}
+		if !strings.Contains(text, "project folders with capital letters") {
+			t.Errorf("%s does not say what doctor shows", name)
+		}
+	}
+	if ref := read("docs/reference.md"); !strings.Contains(ref, "except by the copy warning of a merge") || strings.Contains(ref, "are refused as well") || strings.Contains(design, "treats as one are refused") {
+		t.Error("the embedder or the name-collision overclaim is back")
+	}
 	if strings.Contains(recipe, "until the repository is clean") {
 		t.Error("the Conflicts paragraph still overclaims")
 	}
