@@ -21,7 +21,8 @@ type Note struct {
 var (
 	spaces     = regexp.MustCompile(`\s+`)
 	reNumber   = regexp.MustCompile(`\d+(?:[.,]\d+)*`)
-	reListMark = regexp.MustCompile(`(?m)^\s*\d+[.)]\s`) // "1. " at the start of a line numbers a list; it is not a value
+	reListMark = regexp.MustCompile(`(?m)^\s*\d+[.)]\s`)        // "1. " at the start of a line numbers a list; it is not a value
+	reEnum     = regexp.MustCompile(`(^|\s)\(?\d{1,2}\)(\s|$)`) // "(1) first ... (2) second" inside a sentence numbers items; it is not a value
 	reHeading  = regexp.MustCompile(`^#{1,6}\s`)
 )
 
@@ -45,6 +46,7 @@ func norm(s string) string {
 func numbers(text string) []string {
 	seen := map[string]bool{}
 	var out []string
+	text = reEnum.ReplaceAllString(reEnum.ReplaceAllString(text, "$1 $2"), "$1 $2") // twice: neighbours share a space
 	for _, n := range reNumber.FindAllString(reListMark.ReplaceAllString(text, ""), -1) {
 		if !seen[n] {
 			seen[n] = true
@@ -160,9 +162,14 @@ func CheckPage(oldBody, newBody string, notes []Note, resolve func(link string) 
 		}
 	}
 
-	// (iv) links
+	// (iv) links. Only links the merge adds are judged; a link that was already in the old text (even a broken one)
+	// is old text, and old text is kept as it is.
+	oldLinks := map[string]bool{}
+	for _, l := range md.WikiLinks(oldBody) {
+		oldLinks[l] = true
+	}
 	for _, l := range md.WikiLinks(newBody) {
-		if !resolve(l) {
+		if !oldLinks[l] && !resolve(l) {
 			probs = append(probs, fmt.Sprintf("broken link [[%s]]", clip(l)))
 		}
 	}

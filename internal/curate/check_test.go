@@ -113,3 +113,25 @@ func TestCheckPageLargePageIsFast(t *testing.T) {
 		t.Fatal(probs)
 	}
 }
+
+func TestEnumerationLabelsAreNotValues(t *testing.T) {
+	got := numbers("Patterns: (1) fast probes, (2) typed results, 3) strict parsing, and 6 retries in 10 s.")
+	want := []string{"6", "10"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+func TestOldBrokenLinksAreNotHeldAgainstAMerge(t *testing.T) {
+	old := "# Page\n\nRelated: [[Gone Page]].\n"
+	notes := []Note{{ID: "11111111-0000-0000-0000-000000000000", Text: "The worker retries three times and then parks the card for a person to look at."}}
+	none := func(string) bool { return false }
+	nw := old + "\nThe worker retries three times and then parks the card for a person to look at.\n"
+	if p := CheckPage(old, nw, notes, none); len(p) != 0 {
+		t.Fatalf("an old broken link must not refuse the page: %v", p)
+	}
+	nw2 := nw + "\nSee also [[Another Gone Page]].\n"
+	if p := CheckPage(old, nw2, notes, none); len(p) != 1 || !strings.Contains(p[0], "Another Gone Page") {
+		t.Fatalf("a new broken link must refuse the page: %v", p)
+	}
+}

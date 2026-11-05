@@ -91,7 +91,8 @@ func BuildPrompt(b Batch) string {
 Place every note into the best page: an existing page given in "related", or a new page.
 - Return the WHOLE new body of every page you change: for an existing page, its text exactly as given plus your insertions; do not rewrite, reorder, shorten or delete anything that is already there. Do not return pages you do not change.
 - Keep every number, name, path and command of a note exactly as written. Put the note's sentence (a lightly edited sentence is fine, an 8-word run of it must stay verbatim) in the section of the page where it belongs.
-- Use [[Page Title]] links only to titles listed in "pages" or to pages you create in this same answer.
+- Use [[Page Title]] links only to titles listed in "pages" or to pages you create in this same answer. Copy a title character for character from "pages" (underscores and capitals included); when unsure, write no link.
+- A note must arrive whole: every item, number and range of it, even when it is long. Do not summarise a note and do not drop the end of it.
 - Give each new page a short plain title (no slash, no leading dot, at most 100 characters; not "Index" or "Unsorted") and a one-line summary.
 - Assign every note to exactly one page by listing its id in that page's "notes".
 - For an existing page, copy "base_hash" from "related"; for a new page leave it empty. Do not write frontmatter.
