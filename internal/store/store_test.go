@@ -145,7 +145,7 @@ func TestLearnIsIdempotentAndWritesAReadableNote(t *testing.T) {
 	// long text is cut at 500 characters
 	long := strings.Repeat("word ", 200)
 	id3, _ := st.Learn(ctx, long, "proj", "x", "")
-	raw, _ = os.ReadFile(filepath.Join(repo, "notes", "proj", id3+".md"))
+	raw, _ = os.ReadFile(filepath.Join(repo, "notes", "proj", id3[:36]+".md"))
 	if n := len([]rune(strings.TrimSpace(strings.SplitN(string(raw), "---\n", 3)[2]))); n > MaxNote {
 		t.Fatalf("note body is %d characters", n)
 	}

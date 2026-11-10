@@ -66,7 +66,7 @@ func (s *Store) WikiReadFor(path string, allow func(project string) bool) (strin
 	return "", fmt.Errorf("no wiki entry %q", path)
 }
 
-// readWikiFile reads wiki/<rel>, refusing a symlink that leads out of wiki/. A missing file is an os.IsNotExist error.
+// readWikiFile reads wiki/<rel>, refusing a symlink that leads out of wiki/ or out of the page's own project folder. A missing file is an os.IsNotExist error.
 func (s *Store) readWikiFile(rel string) (string, error) {
 	root := filepath.Join(s.Repo, "wiki")
 	full := filepath.Join(root, filepath.FromSlash(rel))
@@ -75,6 +75,9 @@ func (s *Store) readWikiFile(rel string) (string, error) {
 			rl, err := filepath.Rel(r, f)
 			if err != nil || strings.HasPrefix(rl, "..") {
 				return "", fmt.Errorf("path leaves wiki/")
+			}
+			if proj := pageProject("wiki/" + rel); proj != "" && !strings.HasPrefix(rl, proj+string(filepath.Separator)) {
+				return "", os.ErrNotExist // a link into another project's folder: the page does not exist for this caller
 			}
 		}
 	}

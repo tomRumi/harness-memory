@@ -143,7 +143,7 @@ set with `HMS_EMBED_API` (`ollama` or `openai`), `HMS_EMBED_URL` (default `http:
 Setting `HMS_TOKENS_DIR` to a directory turns token mode on for `hms serve`. Unset, nothing changes: every caller on the
 machine may read and write. The `hms` commands (`recall`, `curate`, ...) are the local operator and are not limited.
 
-In token mode `/mcp` needs `Authorization: Bearer <token>`. A missing or unknown token gets 401 without detail. The
+In token mode `/healthz` needs no token and answers only `ok`, with no project named. `/mcp` needs `Authorization: Bearer <token>`. A missing or unknown token gets 401 without detail. The
 directory holds one file per project, `<project>.json`:
 
 ```json
@@ -165,7 +165,7 @@ directory holds one file per project, `<project>.json`:
   hit, for example `[memory notes/p/<id> #1a2b3c4d unverified, by name] text`, and so does the hook context block.
   `hms curate -pending` leaves unverified notes out, and `-submit` neither merges nor deletes one: a page that names one
   is stale and everything stays. A repeated `learn` of the same text changes nothing and says if the stored note is
-  unverified. A staged token cannot `fact_add`, and its `retire` and `learn(supersedes)` work only on unverified notes:
+  unverified (and `supersedes` is still applied). A staged token cannot `fact_add`, and its `retire` and `learn(supersedes)` work only on unverified notes, judged by the note's file:
   for any other target nothing is deleted and the answer says why (the new note of `learn` is still stored).
 - `verify(id, project)` removes `status` from the note and leaves the rest of the file as it was. Open mode may call it;
   in token mode it needs the `verify` right in the project. An active note, an unknown id or an ambiguous one changes
@@ -179,7 +179,7 @@ directory holds one file per project, `<project>.json`:
   `{"project":"p","total":2,"notes":[{"id":"notes/p/<uuid>","short":"1a2b3c4d","kind":"learning","status":"unverified","author":"name","created":"2026-11-10T16:59:14Z","text":"..."}]}`
 - Fail closed: the directory missing, not a directory or writable by group or others, or a file writable by group or
   others, not valid JSON, with an unknown key, a version other than 1, an invalid project name or one that is not its
-  file name, a key that is not 64 lower-case hex, or another `learn_status`: every request is refused with a 5xx that names
+  file name, a key that is not 64 lower-case hex, another `learn_status`, or a token that is both staged and allowed to `verify` (it would check its own notes): every request is refused with a 5xx that names
   the file and the fault (never a digest or a token). `hms serve` checks the directory at start and exits with the same
   reason. Make files with `chmod 600` and the directory `chmod 700`.
 

@@ -126,6 +126,9 @@ func parse(b []byte, base string) (*file, error) {
 		if g.LearnStatus != "" && g.LearnStatus != "unverified" {
 			return nil, fmt.Errorf("learn_status must be \"\" or \"unverified\", not %q", g.LearnStatus)
 		}
+		if g.Verify && g.LearnStatus == "unverified" {
+			return nil, fmt.Errorf("a token may not be both staged (learn_status \"unverified\") and allowed to verify: it would check its own notes")
+		}
 	}
 	return &f, nil
 }

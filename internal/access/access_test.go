@@ -101,3 +101,14 @@ func TestFaultsAreNamedAndNeverShowADigest(t *testing.T) {
 		t.Errorf("file as dir: %v", err)
 	}
 }
+
+// A token that may verify must not be staged: it would check its own notes.
+func TestGrantStagedAndVerifyIsRefused(t *testing.T) {
+	d := dirWith(t, map[string]string{
+		"a.json": `{"version":1,"project":"a","tokens":{"` + goodDigest + `":{"write":true,"verify":true,"learn_status":"unverified"}}}`,
+	})
+	_, err := Load(d)
+	if err == nil || !strings.Contains(err.Error(), "a.json") {
+		t.Errorf("want an error naming a.json, got %v", err)
+	}
+}

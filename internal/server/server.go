@@ -584,6 +584,10 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		if s.TokensDir != "" { // no token is asked here, so no project may be named
+			fmt.Fprintln(w, "ok")
+			return
+		}
 		fmt.Fprintln(w, s.Stats(r.Context(), StatsIn{}))
 	})
 	return mux

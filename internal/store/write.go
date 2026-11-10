@@ -51,22 +51,30 @@ func (s *Store) LearnAs(ctx context.Context, text, proj, kind, supersedes string
 	if !hasLetterOrDigit(text) {
 		return "", fmt.Errorf("nothing to remember: the text has no letter or digit")
 	}
+	id := DetID("mem", text) // from the full text: two notes that differ only after the cut are two notes
+	cut := ""
 	if r := []rune(text); len(r) > MaxNote {
 		text = string(r[:MaxNote-3]) + "…"
+		cut = fmt.Sprintf(" || cut to %d characters", MaxNote)
 	}
 	kind = strings.TrimSpace(kind)
 	if kind == "" {
 		kind = "learning"
 	}
-	id := DetID("mem", text)
 	rel := "notes/" + proj + "/" + id + ".md"
 	err = s.Do(func(tx *Tx) error {
-		out = id
+		out = id + cut
 		if raw, err := os.ReadFile(filepath.Join(s.Repo, rel)); err == nil {
 			s.Event("learn_dup", id, proj, "")
 			if md.Parse(raw).Str("status") == Unverified {
 				out += " || already stored, and it is unverified: it has not been checked yet"
 			}
+			note, err := s.supersede(tx, strings.TrimSpace(supersedes), proj, id, w != nil && w.Staged)
+			if err != nil {
+				return err
+			}
+			out += note
+			tx.Finish(ctx, "")
 			return nil
 		}
 		fm := map[string]any{"kind": kind, "created": time.Now().UTC().Format(time.RFC3339Nano), "source": "learn"}
@@ -83,7 +91,7 @@ func (s *Store) LearnAs(ctx context.Context, text, proj, kind, supersedes string
 		if err != nil {
 			return err
 		}
-		out = id + note
+		out = id + cut + note
 		tx.Event("learn", id, proj, kind)
 		tx.Finish(ctx, "")
 		return nil
@@ -116,7 +124,7 @@ func (s *Store) supersede(tx *Tx, prefix, proj, newID string, staged bool) (stri
 	if len(notes) != 1 {
 		return fmt.Sprintf(" || supersedes=%q matched no single note — nothing was marked as replaced", prefix), nil
 	}
-	if staged && s.status(notes[0]) != Unverified {
+	if staged && fileStatus(s.Repo, notes[0]) != Unverified {
 		return fmt.Sprintf(" || supersedes=%q names a note that is verified, and a staged token may replace only unverified notes — nothing was marked as replaced", prefix), nil
 	}
 	if err := tx.Delete(notes[0], proj, "supersede", "->"+newID); errors.Is(err, ErrNotCommitted) {
@@ -194,11 +202,14 @@ func (s *Store) resolve(prefix, proj string) (id string, msg string) {
 	return ids[0], ""
 }
 
-// status is the status of a node in the index ("" for an active note, a fact or an unknown node).
-func (s *Store) status(id string) string {
-	var st string
-	s.DB.QueryRow(`SELECT status FROM nodes WHERE id=?`, id).Scan(&st)
-	return st
+// fileStatus is the status in the frontmatter of the file of a node id ("" for an active note, a fact or an unreadable
+// file). The file is the truth: the index may not have caught up with a git pull yet.
+func fileStatus(repo, id string) string {
+	raw, err := os.ReadFile(filepath.Join(repo, filepath.FromSlash(id)+".md"))
+	if err != nil {
+		return ""
+	}
+	return md.Parse(raw).Str("status")
 }
 
 // Retire is RetireAs for a caller that may retire anything.
@@ -225,7 +236,7 @@ func (s *Store) RetireAs(ctx context.Context, prefix, reason, proj string, stage
 		if err := s.DB.QueryRow(`SELECT project FROM nodes WHERE id=?`, id).Scan(&p); err != nil {
 			return err
 		}
-		if staged && s.status(id) != Unverified {
+		if staged && fileStatus(s.Repo, id) != Unverified {
 			out = "a staged token may retire only unverified notes; " + ShortID(id) + " is verified or is a fact — nothing was removed"
 			return nil
 		}

@@ -126,7 +126,7 @@ memory/
 ```
 
 A node's id is its path without `.md`. A note id is a UUID derived from the text, so saving the same text twice is one
-note. Notes are cut at 500 characters. Wiki links are Obsidian style (`[[Title]]`, `[[Title|text]]`, `[[Title#Heading]]`,
+note. Notes are cut at 500 characters (the id comes from the full text, and the answer says the note was cut). Wiki links are Obsidian style (`[[Title]]`, `[[Title|text]]`, `[[Title#Heading]]`,
 `[[project/Title]]`) and resolve case-insensitively by file name or alias, the same project first. Titles are compared
 after Unicode normalisation and full case folding, because the file systems people use treat `Straße` and `Strasse` as one
 name. Project names are lower-case slugs.
@@ -226,7 +226,7 @@ clean before it starts.
 ### 4.7 MCP surface
 
 Streamable HTTP through the official Go SDK, loopback only (other addresses are refused at start; a request with a foreign
-`Host` header gets 403, also on `/healthz`). With `HMS_TOKENS_DIR` set, `/mcp` also needs a bearer token (checked with the
+`Host` header gets 403, also on `/healthz`, which in token mode answers only `ok`). With `HMS_TOKENS_DIR` set, `/mcp` also needs a bearer token (checked with the
 SDK's `auth.RequireBearerToken`) and every tool is limited to the projects that token is granted, see
 [reference.md](docs/reference.md#tokens). Nine tools:
 
