@@ -94,7 +94,7 @@ Text with [[Another Page]] links, in the usual Obsidian way.
 
 | What | How |
 |---|---|
-| Use the memory | Register the MCP address in the harness. Eight tools: `recall`, `learn`, `wiki_read`, `fact_add`, `retire` (deletes), `verify`, `feedback`, `stats`. |
+| Use the memory | Register the MCP address in the harness. Nine tools: `recall`, `learn`, `wiki_read`, `fact_add`, `retire` (deletes), `verify`, `list_memory` (lists a project's notes, to find unverified ones), `feedback`, `stats`. |
 | Memory before a prompt | Each harness does it its own way: a hook, a provider, a plugin. The service offers one command, `hms recall -format=context -hook`. |
 | Saving at the end of a session | The harness asks its own model for the conclusions and calls `learn`. Nothing in the service. |
 | Merging | The harness job from section 3.3. |

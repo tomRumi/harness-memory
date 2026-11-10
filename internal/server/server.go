@@ -1,4 +1,4 @@
-// Package server exposes the memory over MCP (streamable HTTP, loopback) with eight tools.
+// Package server exposes the memory over MCP (streamable HTTP, loopback) with nine tools.
 package server
 
 import (
@@ -379,6 +379,12 @@ type VerifyIn struct {
 	ID      string `json:"id" jsonschema:"short id recall prints, or a unique prefix of it (at least 4 characters)"`
 	Project string `json:"project,omitempty" jsonschema:"restrict the lookup to this project"`
 }
+type ListIn struct {
+	Project string `json:"project,omitempty" jsonschema:"the project whose notes to list; required without tokens"`
+	Status  string `json:"status,omitempty" jsonschema:"empty for all, unverified or active"`
+	Limit   int    `json:"limit,omitempty" jsonschema:"notes per page, default 50, at most 200"`
+	Offset  int    `json:"offset,omitempty" jsonschema:"notes to skip, default 0"`
+}
 type WikiReadIn struct {
 	Path string `json:"path" jsonschema:"path under wiki/ (project/Page Title.md) or a page title (Page Title, or project/Page Title)"`
 }
@@ -519,6 +525,21 @@ func (s *Server) Handler() http.Handler {
 					return nil, nil, fmt.Errorf("this token may not verify notes in project %s; nothing was done", proj)
 				}
 				t, err := s.St.Verify(ctx, in.ID, proj)
+				if err != nil {
+					return nil, nil, err
+				}
+				return text(t)
+			})
+		mcp.AddTool(m, &mcp.Tool{Name: "list_memory", Description: "List the notes of one project, newest first, as JSON: id, short id, kind, status (unverified or active), author, created and the full text, with the total that matches. Use it to find the unverified notes; recall is ranked and cannot list."},
+			func(ctx context.Context, req *mcp.CallToolRequest, in ListIn) (*mcp.CallToolResult, any, error) {
+				if r, err := s.Rights(req); err == nil && r == nil && strings.TrimSpace(in.Project) == "" {
+					return nil, nil, fmt.Errorf("give the project whose notes to list; nothing was listed")
+				}
+				proj, _, err := s.scope(req, in.Project, false)
+				if err != nil {
+					return nil, nil, err
+				}
+				t, err := s.St.ListNotes(proj, in.Status, in.Limit, in.Offset)
 				if err != nil {
 					return nil, nil, err
 				}

@@ -5,7 +5,7 @@ Commands, file formats, the merge check and settings. For what the service is an
 ## Commands and tools
 
 - `hms init`, `doctor`, `wiki`, `curate`, `rescan`, `recall`, `embed`, `stats`, `hash`, `digests`, `bench`, `serve`.
-- Eight MCP tools: `recall`, `learn`, `wiki_read`, `fact_add`, `retire`, `verify`, `feedback`, `stats`.
+- Nine MCP tools: `recall`, `learn`, `wiki_read`, `fact_add`, `retire`, `verify`, `list_memory`, `feedback`, `stats`.
 - `recall` searches three layers: `wiki`, `memory` (notes and facts) and `fact`; the default asks wiki and memory.
   Keyword search and vector search (on by default) fused by rank.
 - Saving never fails because the embedder is down: the note is written, indexed and committed, the vector is made
@@ -167,6 +167,13 @@ directory holds one file per project, `<project>.json`:
 - `verify(id, project)` removes `status` from the note and leaves the rest of the file as it was. Open mode may call it;
   in token mode it needs the `verify` right in the project. An active note, an unknown id or an ambiguous one changes
   nothing and the answer says so.
+- `list_memory(project, status, limit, offset)` lists the notes of one project (not facts or wiki pages), newest first
+  (created, then id), so that whoever checks notes can find the unverified ones; `recall` is ranked and capped and cannot
+  list. `status` is empty (all), `unverified` or `active`; any other value is refused. `limit` defaults to 50 and is cut
+  to 200; `offset` defaults to 0; a negative one is refused. Open mode needs a project. In token mode the project is
+  resolved like `recall`'s and reading needs no `write` right. The answer is JSON; `total` counts all notes that match
+  the filter, not the page, and `text` is the full note text:
+  `{"project":"p","total":2,"notes":[{"id":"notes/p/<uuid>","short":"1a2b3c4d","kind":"learning","status":"unverified","author":"name","created":"2026-11-10T16:59:14Z","text":"..."}]}`
 - Fail closed: the directory missing, not a directory or writable by group or others, or a file writable by group or
   others, not valid JSON, with an unknown key, a version other than 1, an invalid project name or one that is not its
   file name, a key that is not 64 lower-case hex, or another `learn_status`: every request is refused with a 5xx that names

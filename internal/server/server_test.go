@@ -127,7 +127,7 @@ func call(t *testing.T, s *mcp.ClientSession, name string, args map[string]any) 
 	return b.String(), res.IsError
 }
 
-func TestEightToolsAndTheirSchemaSize(t *testing.T) {
+func TestNineToolsAndTheirSchemaSize(t *testing.T) {
 	s, _, _, _, _ := setup(t)
 	tools, err := s.ListTools(context.Background(), nil)
 	if err != nil {
@@ -138,7 +138,7 @@ func TestEightToolsAndTheirSchemaSize(t *testing.T) {
 	for _, tl := range tools.Tools {
 		names = append(names, tl.Name)
 	}
-	want := "fact_add feedback learn recall retire stats verify wiki_read"
+	want := "fact_add feedback learn list_memory recall retire stats verify wiki_read"
 	got := strings.Join(sortStrings(names), " ")
 	if got != want {
 		t.Fatalf("tools %q, want %q", got, want)
