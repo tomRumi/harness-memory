@@ -148,10 +148,17 @@ func (tx *Tx) Write(rel string, data []byte) error {
 }
 
 // Delete removes the note or fact node id (for example notes/p/<uuid>) and updates the index. A non-empty event
-// kind is recorded in the event history with the detail.
+// kind is recorded in the event history with the detail. The file is deleted only when its text is in a commit (see
+// Committer.Keep); otherwise nothing changes and the error wraps ErrNotCommitted.
 func (tx *Tx) Delete(id, project, event, detail string) error {
 	rel := id + ".md"
 	if err := tx.guard(rel); err != nil {
+		return err
+	}
+	if tx.s.Commit == nil {
+		return fmt.Errorf("%w (no committer is running)", ErrNotCommitted)
+	}
+	if err := tx.s.Commit.Keep(rel); err != nil {
 		return err
 	}
 	if err := tx.remember(rel); err != nil {

@@ -10,8 +10,11 @@ Commands, file formats, the merge check and settings. For what the service is an
   Keyword search and vector search (on by default) fused by rank.
 - Saving never fails because the embedder is down: the note is written, indexed and committed, the vector is made
   afterwards in the background (5 second limit, outside the write lock), and `stats` shows `vectors: unavailable: <reason>` until it works again.
-- `retire` and `learn(supersedes=id)` delete the note or fact file. The deletion is committed; git history keeps the
-  text, so a deleted note can be recovered with `git checkout`.
+- `retire` and `learn(supersedes=id)` delete the note or fact file. Before a file is deleted, the service makes sure
+  its text is in the HEAD commit, committing it at once if it is not (the quiet delay does not apply). When it cannot
+  (commits failing, a merge or rebase in progress, a detached HEAD, a memory that is not a git repository) nothing is
+  deleted and the answer says why: `retire` answers "not retired ...; it is still there", and `learn` still stores the
+  new note and says nothing was replaced. A deleted note can be recovered with `git checkout`.
 - One committer per process makes the commits (`hms serve` and each `hms curate` or `hms wiki index` run have their own; the lock file keeps their writes apart, and every writing command first commits the leftovers of an interrupted run that it can see: new, changed, deleted or staged files; a commit that fails is reported as `committed: NO (...)` with exit status 1, and `hms doctor` shows a merge or rebase in progress, a detached HEAD, an index.lock, foreign staged files, project folders with capital letters and memory folders that git ignores; a signing or hook failure is shown by the error the command prints; after `git add` the committer checks that git staged every file it named, and a project folder with capital letters, such as `wiki/MyProj`, makes every write refuse before anything changes, with the instruction to `git mv` it to lower case and run `hms rescan`): after a quiet moment, never during a merge or rebase, never when you have staged
   something else, and it retries after a failure.
 - `feedback` records helpful or unhelpful ratings per session; a note that five different sessions rated unhelpful

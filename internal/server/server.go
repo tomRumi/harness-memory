@@ -502,7 +502,7 @@ func (s *Server) Handler() http.Handler {
 				}
 				return text(id)
 			})
-		mcp.AddTool(m, &mcp.Tool{Name: "retire", Description: "Delete a note or fact that is wrong or no longer applies. The file is removed and git history keeps its text. An unknown or ambiguous id changes nothing."},
+		mcp.AddTool(m, &mcp.Tool{Name: "retire", Description: "Delete a note or fact that is wrong or no longer applies. The file is removed after its text is in a git commit; if that cannot be done nothing is deleted and the answer says why. An unknown or ambiguous id changes nothing."},
 			func(ctx context.Context, req *mcp.CallToolRequest, in RetireIn) (*mcp.CallToolResult, any, error) {
 				proj, r, err := s.scope(req, in.Project, true)
 				if err != nil {

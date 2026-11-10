@@ -286,6 +286,45 @@ func (c *Committer) unstage() {
 	c.git("--literal-pathspecs", "reset", "-q", "--", "notes", "facts", "wiki")
 }
 
+// ErrNotCommitted is the reason a file is not deleted: its text is not in a commit, and making one failed.
+var ErrNotCommitted = errors.New("its text is not in a commit yet and committing failed")
+
+// Keep makes sure the file rel, as it is on disk now, is in the HEAD commit, so that deleting it loses no text. When it
+// is not, the file is committed now (Flush is synchronous and takes no store lock, so the caller may hold it) and git
+// is asked again. It returns an error wrapping ErrNotCommitted, with the reason, when that did not work; the caller then
+// deletes nothing. A file that is already gone needs nothing.
+func (c *Committer) Keep(rel string) error {
+	if _, err := os.Stat(filepath.Join(c.repo, filepath.FromSlash(rel))); os.IsNotExist(err) {
+		return nil
+	}
+	if c.off {
+		return fmt.Errorf("%w (the memory is not a git repository)", ErrNotCommitted)
+	}
+	if c.inHead(rel) {
+		return nil
+	}
+	c.Notify(rel)
+	c.Flush()
+	if c.inHead(rel) {
+		return nil
+	}
+	reason := "git did not take it"
+	if err := c.LastErr(); err != nil {
+		reason = err.Error()
+	}
+	return fmt.Errorf("%w (%s)", ErrNotCommitted, reason)
+}
+
+// inHead asks git whether HEAD holds rel with exactly the bytes that are on disk.
+func (c *Committer) inHead(rel string) bool {
+	head, err := c.git("rev-parse", "-q", "--verify", "HEAD:"+rel)
+	if err != nil {
+		return false
+	}
+	disk, err := c.git("hash-object", "--", rel)
+	return err == nil && disk == head
+}
+
 // Ignored reports whether git ignores rel (by .gitignore, .git/info/exclude or the global ignore file). git add
 // refuses such a path, so nothing may be written there as part of a set that is committed together.
 func (c *Committer) Ignored(rel string) bool {

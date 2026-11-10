@@ -216,8 +216,8 @@ Outcomes per page: **merged**; **unsorted** (a page that fails a check, or whose
 notes are appended to the page `Unsorted` as plain bullets, so a failed page never blocks the queue and its notes are
 not dropped); **stale** (the page changed since `-pending`, or a file already has that name: the notes stay pending). Notes are
 deleted only after their text is in a written page or in `Unsorted`. The service composes the frontmatter itself (the
-model cannot inject keys), regenerates `Index.md`, and makes one commit for the whole submit. Git history keeps every
-deleted note.
+model cannot inject keys), regenerates `Index.md`, and makes one commit for the whole submit. A note is deleted only once its text is in a
+commit (it is committed first if needed; if that fails the submit stops and nothing is deleted), so git history keeps every deleted note.
 
 Several machines need no lock and no owner setting: the job pulls first, merges, pushes; if the push is rejected it runs
 `git pull --rebase`, and on a conflict it aborts and stops for the operator. The recipe checks that the repository is
@@ -236,7 +236,7 @@ SDK's `auth.RequireBearerToken`) and every tool is limited to the projects that 
 | `learn` | save a note (project, optional kind label, optional `supersedes` id, which deletes the old note) |
 | `wiki_read` | a page by path or title, with links, backlinks and related pages |
 | `fact_add` | save a durable fact |
-| `retire` | delete a wrong note or fact (git keeps it) |
+| `retire` | delete a wrong note or fact (its text is committed first) |
 | `verify` | mark an unverified note as checked (token mode: needs the `verify` right) |
 | `list_memory` | list the notes of one project, newest first, optionally only the unverified ones (token mode: any token of the project) |
 | `feedback` | helpful / unhelpful per session; five sessions rating a note unhelpful, none helpful, lists it as a candidate for deletion |

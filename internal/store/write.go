@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"crypto/sha1"
+	"errors"
 	"fmt"
 	"github.com/tomRumi/harness-memory/internal/md"
 	"github.com/tomRumi/harness-memory/internal/wiki"
@@ -118,10 +119,12 @@ func (s *Store) supersede(tx *Tx, prefix, proj, newID string, staged bool) (stri
 	if staged && s.status(notes[0]) != Unverified {
 		return fmt.Sprintf(" || supersedes=%q names a note that is verified, and a staged token may replace only unverified notes — nothing was marked as replaced", prefix), nil
 	}
-	if err := tx.Delete(notes[0], proj, "supersede", "->"+newID); err != nil {
+	if err := tx.Delete(notes[0], proj, "supersede", "->"+newID); errors.Is(err, ErrNotCommitted) {
+		return fmt.Sprintf(" || nothing was replaced, %s: %v; it is still there", ShortID(notes[0]), err), nil
+	} else if err != nil {
 		return "", err
 	}
-	return " || replaced " + ShortID(notes[0]) + " (deleted; git history keeps its text)", nil
+	return " || replaced " + ShortID(notes[0]) + " (deleted; its text is in the git history)", nil
 }
 
 func hasLetterOrDigit(s string) bool {
@@ -203,8 +206,9 @@ func (s *Store) Retire(ctx context.Context, prefix, reason, proj string) (string
 	return s.RetireAs(ctx, prefix, reason, proj, false)
 }
 
-// RetireAs deletes a note or fact. The file is removed and the node leaves the index; the committer records the
-// deletion, so git history keeps the text. A staged caller may delete only a note that is unverified.
+// RetireAs deletes a note or fact. The file is removed and the node leaves the index; the text is first put in a commit
+// (see Tx.Delete), and when that is not possible nothing is deleted and the answer says why. A staged caller may
+// delete only a note that is unverified.
 func (s *Store) RetireAs(ctx context.Context, prefix, reason, proj string, staged bool) (string, error) {
 	proj, err := wiki.OptionalProject(proj)
 	if err != nil {
@@ -226,7 +230,10 @@ func (s *Store) RetireAs(ctx context.Context, prefix, reason, proj string, stage
 			return nil
 		}
 		reason = wiki.Cut(reason, 200)
-		if err := tx.Delete(id, p, "retire", reason); err != nil {
+		if err := tx.Delete(id, p, "retire", reason); errors.Is(err, ErrNotCommitted) {
+			out = "not retired " + ShortID(id) + ": " + err.Error() + "; it is still there"
+			return nil
+		} else if err != nil {
 			return err
 		}
 		tx.Finish(ctx, "")

@@ -10,7 +10,7 @@ at that address.
 | `learn` | save a note (up to 500 characters, with a project and an optional `topic:type` label that is informational only) |
 | `wiki_read` | read a wiki page by path or title; the answer ends with its links, backlinks and related pages |
 | `fact_add` | save a durable fact |
-| `retire` | delete a wrong note or fact (git keeps the text) |
+| `retire` | delete a wrong note or fact (the text is committed first) |
 | `feedback` | say whether a recalled note helped; needs a session name; a note that 5 sessions rated unhelpful is listed by `hms curate`; only `retire` deletes |
 | `stats` | counts, whether vectors are on, notes waiting, last commit problem; use it as the connection check |
 

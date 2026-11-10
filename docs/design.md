@@ -22,7 +22,7 @@ All three are markdown files in a local git repository. The files are the record
 
 | 1. Save | 2. Recall | 3. Merge | 4. Clear |
 |---|---|---|---|
-| An agent calls `learn`. A note file appears and is searchable at once. | Any session searches notes, wiki entries and facts together. | A scheduled job takes the waiting notes, has a model place them into wiki pages, and sends the result to the service. | The service checks the result, writes the pages, deletes the merged notes and makes one commit. The notes live on in git history. |
+| An agent calls `learn`. A note file appears and is searchable at once. | Any session searches notes, wiki entries and facts together. | A scheduled job takes the waiting notes, has a model place them into wiki pages, and sends the result to the service. | The service checks the result, writes the pages, deletes the merged notes and makes one commit. Before a note is deleted its text is in a commit, so it lives on in git history. |
 
 ### 3.1 Save
 
