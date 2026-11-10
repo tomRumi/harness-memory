@@ -11,6 +11,7 @@ import (
 type Hit struct {
 	ChunkID                                    int64
 	NodeID, Kind, Project, Path, Section, Text string
+	Status, Author                             string // of a note: "unverified" until it is checked, and who wrote it
 	Score                                      float64
 }
 
@@ -59,7 +60,7 @@ func (d *DB) Keyword(query string, f Filter) ([]Hit, error) {
 	if f.Limit <= 0 {
 		f.Limit = 5
 	}
-	sqlq := `SELECT c.id, n.id, n.kind, n.project, n.path, c.section, c.text, bm25(chunks_fts, 1.0, 0.5) AS score
+	sqlq := `SELECT c.id, n.id, n.kind, n.project, n.path, c.section, c.text, n.status, n.author, bm25(chunks_fts, 1.0, 0.5) AS score
 	  FROM chunks_fts JOIN chunks c ON c.id = chunks_fts.rowid JOIN nodes n ON n.id = c.node_id
 	  WHERE chunks_fts MATCH ?`
 	args := []any{mq}
@@ -83,7 +84,7 @@ func (d *DB) Keyword(query string, f Filter) ([]Hit, error) {
 	var out []Hit
 	for rows.Next() {
 		var h Hit
-		if err := rows.Scan(&h.ChunkID, &h.NodeID, &h.Kind, &h.Project, &h.Path, &h.Section, &h.Text, &h.Score); err != nil {
+		if err := rows.Scan(&h.ChunkID, &h.NodeID, &h.Kind, &h.Project, &h.Path, &h.Section, &h.Text, &h.Status, &h.Author, &h.Score); err != nil {
 			return nil, err
 		}
 		out = append(out, h)

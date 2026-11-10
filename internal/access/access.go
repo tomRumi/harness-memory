@@ -22,7 +22,7 @@ import (
 	"github.com/tomRumi/harness-memory/internal/wiki"
 )
 
-// Grant is what a token may do in one project. Verify and LearnStatus are stored for later use; nothing reads them yet.
+// Grant is what a token may do in one project. Verify lets it call verify; LearnStatus "unverified" makes it staged.
 type Grant struct {
 	Write       bool   `json:"write"`
 	Verify      bool   `json:"verify"`

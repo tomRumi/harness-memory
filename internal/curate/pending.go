@@ -102,7 +102,8 @@ func SkippedNotes(repo, project string) int {
 	return n
 }
 
-// readNotes lists the notes of a project with a text, oldest first (frontmatter created, then id).
+// readNotes lists the notes of a project with a text, oldest first (frontmatter created, then id). A note that is
+// unverified is left out: nobody has checked it, so it must not become wiki text.
 func readNotes(repo, project string) ([]waitingNote, error) {
 	dir := filepath.Join(repo, "notes", project)
 	ents, err := os.ReadDir(dir)
@@ -124,7 +125,7 @@ func readNotes(repo, project string) ([]waitingNote, error) {
 		}
 		d := md.Parse(raw)
 		text := strings.TrimSpace(d.Body)
-		if text == "" {
+		if text == "" || d.Str("status") == store.Unverified {
 			continue
 		}
 		created := time.Time{}

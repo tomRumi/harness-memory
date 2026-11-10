@@ -21,9 +21,24 @@ func DetID(prefix string, parts ...string) string {
 	return x[:8] + "-" + x[8:12] + "-" + x[12:16] + "-" + x[16:20] + "-" + x[20:32]
 }
 
-// Learn deposits one note and returns its id plus a short remark for the caller. It is idempotent: the same text
-// returns the same id and changes nothing.
-func (s *Store) Learn(ctx context.Context, text, proj, kind, supersedes string) (out string, err error) {
+// Writer says who a write is made by when an access token makes it (nil: open mode, no author, no status). A staged
+// writer's notes wait for a check (status unverified) and it may replace or retire only notes that still wait.
+type Writer struct {
+	Author string
+	Staged bool
+}
+
+// Unverified is the status of a note that has not been checked.
+const Unverified = "unverified"
+
+// Learn is LearnAs in open mode.
+func (s *Store) Learn(ctx context.Context, text, proj, kind, supersedes string) (string, error) {
+	return s.LearnAs(ctx, text, proj, kind, supersedes, nil)
+}
+
+// LearnAs deposits one note and returns its id plus a short remark for the caller. It is idempotent: the same text
+// returns the same id and changes nothing (the remark then says if the stored note is unverified).
+func (s *Store) LearnAs(ctx context.Context, text, proj, kind, supersedes string, w *Writer) (out string, err error) {
 	proj, err = project(proj)
 	if err != nil {
 		return "", err
@@ -46,15 +61,24 @@ func (s *Store) Learn(ctx context.Context, text, proj, kind, supersedes string) 
 	rel := "notes/" + proj + "/" + id + ".md"
 	err = s.Do(func(tx *Tx) error {
 		out = id
-		if _, err := os.Stat(filepath.Join(s.Repo, rel)); err == nil {
+		if raw, err := os.ReadFile(filepath.Join(s.Repo, rel)); err == nil {
 			s.Event("learn_dup", id, proj, "")
+			if md.Parse(raw).Str("status") == Unverified {
+				out += " || already stored, and it is unverified: it has not been checked yet"
+			}
 			return nil
 		}
 		fm := map[string]any{"kind": kind, "created": time.Now().UTC().Format(time.RFC3339Nano), "source": "learn"}
+		if w != nil {
+			fm["author"] = w.Author
+			if w.Staged {
+				fm["status"] = Unverified
+			}
+		}
 		if err := tx.Write(rel, md.Render(fm, text)); err != nil {
 			return err
 		}
-		note, err := s.supersede(tx, strings.TrimSpace(supersedes), proj, id)
+		note, err := s.supersede(tx, strings.TrimSpace(supersedes), proj, id, w != nil && w.Staged)
 		if err != nil {
 			return err
 		}
@@ -69,8 +93,9 @@ func (s *Store) Learn(ctx context.Context, text, proj, kind, supersedes string) 
 	return out, nil
 }
 
-// supersede deletes the single note whose id starts with prefix (inside tx) and returns the remark for the caller.
-func (s *Store) supersede(tx *Tx, prefix, proj, newID string) (string, error) {
+// supersede deletes the single note whose id starts with prefix (inside tx) and returns the remark for the caller. A
+// staged writer may replace only a note that is unverified.
+func (s *Store) supersede(tx *Tx, prefix, proj, newID string, staged bool) (string, error) {
 	if prefix == "" {
 		return "", nil
 	}
@@ -89,6 +114,9 @@ func (s *Store) supersede(tx *Tx, prefix, proj, newID string) (string, error) {
 	}
 	if len(notes) != 1 {
 		return fmt.Sprintf(" || supersedes=%q matched no single note — nothing was marked as replaced", prefix), nil
+	}
+	if staged && s.status(notes[0]) != Unverified {
+		return fmt.Sprintf(" || supersedes=%q names a note that is verified, and a staged token may replace only unverified notes — nothing was marked as replaced", prefix), nil
 	}
 	if err := tx.Delete(notes[0], proj, "supersede", "->"+newID); err != nil {
 		return "", err
@@ -163,9 +191,21 @@ func (s *Store) resolve(prefix, proj string) (id string, msg string) {
 	return ids[0], ""
 }
 
-// Retire deletes a note or fact. The file is removed and the node leaves the index; the committer records the
-// deletion, so git history keeps the text.
+// status is the status of a node in the index ("" for an active note, a fact or an unknown node).
+func (s *Store) status(id string) string {
+	var st string
+	s.DB.QueryRow(`SELECT status FROM nodes WHERE id=?`, id).Scan(&st)
+	return st
+}
+
+// Retire is RetireAs for a caller that may retire anything.
 func (s *Store) Retire(ctx context.Context, prefix, reason, proj string) (string, error) {
+	return s.RetireAs(ctx, prefix, reason, proj, false)
+}
+
+// RetireAs deletes a note or fact. The file is removed and the node leaves the index; the committer records the
+// deletion, so git history keeps the text. A staged caller may delete only a note that is unverified.
+func (s *Store) RetireAs(ctx context.Context, prefix, reason, proj string, staged bool) (string, error) {
 	proj, err := wiki.OptionalProject(proj)
 	if err != nil {
 		return "", err
@@ -180,6 +220,10 @@ func (s *Store) Retire(ctx context.Context, prefix, reason, proj string) (string
 		var p string
 		if err := s.DB.QueryRow(`SELECT project FROM nodes WHERE id=?`, id).Scan(&p); err != nil {
 			return err
+		}
+		if staged && s.status(id) != Unverified {
+			out = "a staged token may retire only unverified notes; " + ShortID(id) + " is verified or is a fact — nothing was removed"
+			return nil
 		}
 		reason = wiki.Cut(reason, 200)
 		if err := tx.Delete(id, p, "retire", reason); err != nil {
@@ -196,4 +240,42 @@ func (s *Store) Retire(ctx context.Context, prefix, reason, proj string) (string
 		return "", err
 	}
 	return out, nil
+}
+
+// Verify marks the note whose id starts with prefix as checked: it removes status from the frontmatter and leaves every
+// other byte of the file alone. A note that is already active, or an id that matches no single note, changes nothing.
+func (s *Store) Verify(ctx context.Context, prefix, proj string) (string, error) {
+	proj, err := wiki.OptionalProject(proj)
+	if err != nil {
+		return "", err
+	}
+	out := ""
+	err = s.Do(func(tx *Tx) error {
+		id, msg := s.resolve(prefix, proj)
+		if msg != "" {
+			out = msg
+			return nil
+		}
+		rel := id + ".md"
+		raw, err := os.ReadFile(filepath.Join(s.Repo, filepath.FromSlash(rel)))
+		if err != nil {
+			return err
+		}
+		if md.Parse(raw).Str("status") != Unverified {
+			out = ShortID(id) + " is already active — nothing changed"
+			return nil
+		}
+		data, err := md.DeleteKey(raw, "status")
+		if err != nil {
+			return err
+		}
+		if err := tx.Write(rel, data); err != nil {
+			return err
+		}
+		tx.Event("verify", id, strings.Split(id, "/")[1], "")
+		tx.Finish(ctx, "")
+		out = "verified " + ShortID(id)
+		return nil
+	})
+	return out, err
 }

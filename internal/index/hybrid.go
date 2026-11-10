@@ -17,7 +17,7 @@ func (d *DB) hitsByID(ids []int64) (map[int64]Hit, error) {
 	for i, id := range ids {
 		args[i] = id
 	}
-	q := `SELECT c.id, n.id, n.kind, n.project, n.path, c.section, c.text FROM chunks c JOIN nodes n ON n.id=c.node_id WHERE c.id IN (` + strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",") + `)`
+	q := `SELECT c.id, n.id, n.kind, n.project, n.path, c.section, c.text, n.status, n.author FROM chunks c JOIN nodes n ON n.id=c.node_id WHERE c.id IN (` + strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",") + `)`
 	rows, err := d.Query(q, args...)
 	if err != nil {
 		return nil, err
@@ -25,7 +25,7 @@ func (d *DB) hitsByID(ids []int64) (map[int64]Hit, error) {
 	defer rows.Close()
 	for rows.Next() {
 		var h Hit
-		if err := rows.Scan(&h.ChunkID, &h.NodeID, &h.Kind, &h.Project, &h.Path, &h.Section, &h.Text); err != nil {
+		if err := rows.Scan(&h.ChunkID, &h.NodeID, &h.Kind, &h.Project, &h.Path, &h.Section, &h.Text, &h.Status, &h.Author); err != nil {
 			return nil, err
 		}
 		out[h.ChunkID] = h

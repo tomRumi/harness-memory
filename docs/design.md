@@ -94,8 +94,8 @@ Text with [[Another Page]] links, in the usual Obsidian way.
 
 | What | How |
 |---|---|
-| Use the memory | Register the MCP address in the harness. Seven tools: `recall`, `learn`, `wiki_read`, `fact_add`, `retire` (deletes), `feedback`, `stats`. |
+| Use the memory | Register the MCP address in the harness. Eight tools: `recall`, `learn`, `wiki_read`, `fact_add`, `retire` (deletes), `verify`, `feedback`, `stats`. |
 | Memory before a prompt | Each harness does it its own way: a hook, a provider, a plugin. The service offers one command, `hms recall -format=context -hook`. |
 | Saving at the end of a session | The harness asks its own model for the conclusions and calls `learn`. Nothing in the service. |
 | Merging | The harness job from section 3.3. |
-| Who may use what | By default anything on the machine can call the tools. With `HMS_TOKENS_DIR` each caller sends a bearer token; token files (one per project, holding only sha256 digests) say which projects it may use and whether it may write. The files are read on every request, so removing one revokes at once, and a fault in the directory or a file refuses every request and names the file; the service never falls back to open. See the Tokens section of the reference. |
+| Who may use what | By default anything on the machine can call the tools. With `HMS_TOKENS_DIR` each caller sends a bearer token; token files (one per project, holding only sha256 digests) say which projects it may use and whether it may write. The files are read on every request, so removing one revokes at once, and a fault in the directory or a file refuses every request and names the file; the service never falls back to open. A token can also be staged: its notes are stored as `status: unverified` and stay out of the merge until someone with the verify right runs `verify`. Every note written with a token records its `author`. See the Tokens section of the reference. |

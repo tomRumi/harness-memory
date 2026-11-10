@@ -5,7 +5,7 @@ Commands, file formats, the merge check and settings. For what the service is an
 ## Commands and tools
 
 - `hms init`, `doctor`, `wiki`, `curate`, `rescan`, `recall`, `embed`, `stats`, `hash`, `digests`, `bench`, `serve`.
-- Seven MCP tools: `recall`, `learn`, `wiki_read`, `fact_add`, `retire`, `feedback`, `stats`.
+- Eight MCP tools: `recall`, `learn`, `wiki_read`, `fact_add`, `retire`, `verify`, `feedback`, `stats`.
 - `recall` searches three layers: `wiki`, `memory` (notes and facts) and `fact`; the default asks wiki and memory.
   Keyword search and vector search (on by default) fused by rank.
 - Saving never fails because the embedder is down: the note is written, indexed and committed, the vector is made
@@ -148,14 +148,25 @@ directory holds one file per project, `<project>.json`:
 ```
 
 - All rights are optional: `write` and `verify` default to false, `learn_status` to `""` (the other value is
-  `"unverified"`). `verify` and `learn_status` are accepted and stored; no tool uses them yet. `name` is a label.
+  `"unverified"`). `name` is a label; it is the `author` of the notes the token writes (without one, the first 8 characters
+  of the token's digest).
 - The same digest in several files grants each of those projects. Files are read again on every request. Names that start
   with `.` are ignored (a writer's temporary file).
 - Every tool is limited to the token's projects. A named project must be granted (else `this token may not use project X`);
   no project means the token's only project, and with several the call is refused and lists them. `recall` searches only
   that project, and the `global` project only when the token is granted `global`. `wiki_read` reads only pages of granted
   projects and its link lines list only those. `retire` and `feedback` find ids only in that project. `stats` counts only
-  it. `learn`, `fact_add` and `retire` need `write` in that project.
+  it. `learn`, `fact_add` and `retire` need `write` in that project; `verify` needs `verify`.
+- Checked notes. A token with `learn_status` `"unverified"` is staged: its `learn` stores the note with `status: unverified`
+  (every note written with a token also has `author: <name>`; in open mode neither key is written). Recall marks such a
+  hit, for example `[memory notes/p/<id> #1a2b3c4d unverified, by name] text`, and so does the hook context block.
+  `hms curate -pending` leaves unverified notes out, and `-submit` neither merges nor deletes one: a page that names one
+  is stale and everything stays. A repeated `learn` of the same text changes nothing and says if the stored note is
+  unverified. A staged token cannot `fact_add`, and its `retire` and `learn(supersedes)` work only on unverified notes:
+  for any other target nothing is deleted and the answer says why (the new note of `learn` is still stored).
+- `verify(id, project)` removes `status` from the note and leaves the rest of the file as it was. Open mode may call it;
+  in token mode it needs the `verify` right in the project. An active note, an unknown id or an ambiguous one changes
+  nothing and the answer says so.
 - Fail closed: the directory missing, not a directory or writable by group or others, or a file writable by group or
   others, not valid JSON, with an unknown key, a version other than 1, an invalid project name or one that is not its
   file name, a key that is not 64 lower-case hex, or another `learn_status`: every request is refused with a 5xx that names

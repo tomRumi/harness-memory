@@ -1,4 +1,4 @@
-// Package server exposes the memory over MCP (streamable HTTP, loopback) with seven tools.
+// Package server exposes the memory over MCP (streamable HTTP, loopback) with eight tools.
 package server
 
 import (
@@ -102,6 +102,12 @@ func label(h index.Hit) string {
 	}
 	if h.Kind == "note" || h.Kind == "fact" {
 		l += " #" + store.ShortID(h.NodeID)
+	}
+	if h.Status == store.Unverified { // a note nobody has checked yet says so, and by whom it was written
+		l += " " + h.Status
+		if h.Author != "" {
+			l += ", by " + h.Author
+		}
 	}
 	return l
 }
@@ -369,6 +375,10 @@ type FactIn struct {
 	Category string  `json:"category,omitempty" jsonschema:"for example user_pref, project, tool, general"`
 	Trust    float64 `json:"trust,omitempty" jsonschema:"0 to 1, default 0.5"`
 }
+type VerifyIn struct {
+	ID      string `json:"id" jsonschema:"short id recall prints, or a unique prefix of it (at least 4 characters)"`
+	Project string `json:"project,omitempty" jsonschema:"restrict the lookup to this project"`
+}
 type WikiReadIn struct {
 	Path string `json:"path" jsonschema:"path under wiki/ (project/Page Title.md) or a page title (Page Title, or project/Page Title)"`
 }
@@ -416,11 +426,25 @@ func (s *Server) scope(req *mcp.CallToolRequest, project string, write bool) (st
 	return p, r, nil
 }
 
+// writer is who a write is made by: nil in open mode, else the name of the grant (or the start of the token digest) and
+// whether the grant is staged, which makes its notes wait for a check.
+func writer(r *access.Rights, project string) *store.Writer {
+	if r == nil {
+		return nil
+	}
+	g := r.Grants[project]
+	w := &store.Writer{Author: g.Name, Staged: g.LearnStatus == store.Unverified}
+	if w.Author == "" {
+		w.Author = r.Digest[:8]
+	}
+	return w
+}
+
 // Handler builds the MCP HTTP handler. Each connection gets its own MCP server object over the shared state.
 func (s *Server) Handler() http.Handler {
 	build := func(*http.Request) *mcp.Server {
 		m := mcp.NewServer(&mcp.Implementation{Name: "harness-memory-service", Version: Version}, nil)
-		mcp.AddTool(m, &mcp.Tool{Name: "recall", Description: "Search the memory: wiki entries, notes and facts. Returns short hits with a path and, for notes, a #id to use with retire, feedback or learn(supersedes)."},
+		mcp.AddTool(m, &mcp.Tool{Name: "recall", Description: "Search the memory: wiki entries, notes and facts. Returns short hits with a path and, for notes, a #id to use with retire, feedback, verify or learn(supersedes). A note marked unverified has not been checked yet."},
 			func(ctx context.Context, req *mcp.CallToolRequest, in RecallIn) (*mcp.CallToolResult, any, error) {
 				proj, r, err := s.scope(req, in.Project, false)
 				if err != nil {
@@ -429,13 +453,13 @@ func (s *Server) Handler() http.Handler {
 				in.Project, in.noGlobal = proj, r != nil && !r.Allows(store.GlobalProject)
 				return text(s.Recall(ctx, in))
 			})
-		mcp.AddTool(m, &mcp.Tool{Name: "learn", Description: "Store one learning (not routine actions). Idempotent: the same text returns the same id. kind is an optional short label such as topic:type; it is informational only and does not decide where the note is merged."},
+		mcp.AddTool(m, &mcp.Tool{Name: "learn", Description: "Store one learning (not routine actions). Idempotent: the same text returns the same id. A staged token's note is stored unverified until someone verifies it. kind is an optional short label such as topic:type; it is informational only and does not decide where the note is merged."},
 			func(ctx context.Context, req *mcp.CallToolRequest, in LearnIn) (*mcp.CallToolResult, any, error) {
-				proj, _, err := s.scope(req, in.Project, true)
+				proj, r, err := s.scope(req, in.Project, true)
 				if err != nil {
 					return nil, nil, err
 				}
-				id, err := s.St.Learn(ctx, in.Text, proj, in.Kind, in.Supersedes)
+				id, err := s.St.LearnAs(ctx, in.Text, proj, in.Kind, in.Supersedes, writer(r, proj))
 				if err != nil {
 					return nil, nil, err
 				}
@@ -459,9 +483,12 @@ func (s *Server) Handler() http.Handler {
 			})
 		mcp.AddTool(m, &mcp.Tool{Name: "fact_add", Description: "Store one durable fact (preference, decision, environment)."},
 			func(ctx context.Context, req *mcp.CallToolRequest, in FactIn) (*mcp.CallToolResult, any, error) {
-				proj, _, err := s.scope(req, in.Project, true)
+				proj, r, err := s.scope(req, in.Project, true)
 				if err != nil {
 					return nil, nil, err
+				}
+				if w := writer(r, proj); w != nil && w.Staged {
+					return nil, nil, fmt.Errorf("this token is staged: its writes wait for a check and facts have none, so it may not add facts; use learn. Nothing was done")
 				}
 				id, err := s.St.AddFact(ctx, in.Text, proj, in.Category, in.Trust)
 				if err != nil {
@@ -471,11 +498,27 @@ func (s *Server) Handler() http.Handler {
 			})
 		mcp.AddTool(m, &mcp.Tool{Name: "retire", Description: "Delete a note or fact that is wrong or no longer applies. The file is removed and git history keeps its text. An unknown or ambiguous id changes nothing."},
 			func(ctx context.Context, req *mcp.CallToolRequest, in RetireIn) (*mcp.CallToolResult, any, error) {
-				proj, _, err := s.scope(req, in.Project, true)
+				proj, r, err := s.scope(req, in.Project, true)
 				if err != nil {
 					return nil, nil, err
 				}
-				t, err := s.St.Retire(ctx, in.ID, in.Reason, proj)
+				w := writer(r, proj)
+				t, err := s.St.RetireAs(ctx, in.ID, in.Reason, proj, w != nil && w.Staged)
+				if err != nil {
+					return nil, nil, err
+				}
+				return text(t)
+			})
+		mcp.AddTool(m, &mcp.Tool{Name: "verify", Description: "Mark an unverified note as checked: it then counts as an ordinary note. Needs the verify right. An unknown or ambiguous id, or a note that is already active, changes nothing."},
+			func(ctx context.Context, req *mcp.CallToolRequest, in VerifyIn) (*mcp.CallToolResult, any, error) {
+				proj, r, err := s.scope(req, in.Project, false)
+				if err != nil {
+					return nil, nil, err
+				}
+				if r != nil && !r.Grants[proj].Verify {
+					return nil, nil, fmt.Errorf("this token may not verify notes in project %s; nothing was done", proj)
+				}
+				t, err := s.St.Verify(ctx, in.ID, proj)
 				if err != nil {
 					return nil, nil, err
 				}

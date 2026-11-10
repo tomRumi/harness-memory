@@ -37,6 +37,7 @@ type parsed struct {
 type nodeRow struct {
 	ID, Kind, Project, Path, Title, NoteKind, Created, Updated, Hash string
 	Summary, Aliases                                                 string // wiki pages only; aliases are one per line
+	Status, Author                                                   string // notes: frontmatter status (unverified or empty) and author
 	Pinned                                                           bool
 }
 
@@ -158,6 +159,9 @@ func parseMarkdown(kind, rel string, raw []byte) parsedWithWarn {
 	n := nodeRow{ID: id, Kind: strings.TrimSuffix(kind, "s"), Project: project, Path: rel, Title: title,
 		Pinned:   doc.Bool("pinned"),
 		NoteKind: nk, Created: doc.Str("created"), Updated: doc.Str("updated"), Hash: sum(raw)}
+	if kind == "notes" {
+		n.Status, n.Author = doc.Str("status"), doc.Str("author")
+	}
 	if kind == "wiki" {
 		n.Summary = meta.Summary
 		if n.Summary == "" {
@@ -299,9 +303,9 @@ func insert(tx *sql.Tx, p parsed) error {
 	if n.Pinned {
 		pin = 1
 	}
-	if _, err := tx.Exec(`INSERT INTO nodes(id,kind,project,path,stem,title,pinned,note_kind,created_at,updated_at,content_hash,summary,aliases)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, n.ID, n.Kind, n.Project, n.Path, strings.TrimSuffix(filepath.Base(n.Path), ".md"), n.Title, pin,
-		n.NoteKind, n.Created, n.Updated, n.Hash, n.Summary, n.Aliases); err != nil {
+	if _, err := tx.Exec(`INSERT INTO nodes(id,kind,project,path,stem,title,pinned,note_kind,created_at,updated_at,content_hash,summary,aliases,status,author)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, n.ID, n.Kind, n.Project, n.Path, strings.TrimSuffix(filepath.Base(n.Path), ".md"), n.Title, pin,
+		n.NoteKind, n.Created, n.Updated, n.Hash, n.Summary, n.Aliases, n.Status, n.Author); err != nil {
 		return err
 	}
 	for i, c := range p.chunks {

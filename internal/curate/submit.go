@@ -178,6 +178,10 @@ func loadWorld(st *store.Store, tx *store.Tx, project string) (*world, []waiting
 		return nil, nil, err
 	}
 	w := &world{project: project, date: Now().Format("2006-01-02"), notes: map[string]Note{}, linkOK: linkOK, ignored: tx.Ignored,
+		unverified: func(id string) bool {
+			raw, err := os.ReadFile(filepath.Join(repo, "notes", project, id+".md"))
+			return err == nil && md.Parse(raw).Str("status") == store.Unverified
+		},
 		taken: func(rel string) bool { return pathTaken(repo, rel) }}
 	for _, n := range all {
 		w.notes[n.ID] = n.Note

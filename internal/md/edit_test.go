@@ -99,3 +99,23 @@ func TestSetKeysDropsAWholeBlockList(t *testing.T) {
 		}
 	}
 }
+
+func TestDeleteKeyRemovesOnlyThatKey(t *testing.T) {
+	src := "---\n# a comment\nid: 1\nstatus: unverified\ntags:\n  - a\n  - b\nzeta: 'q'\n---\n\nBody.\r\nMore.\n"
+	out, err := DeleteKey([]byte(src), "status")
+	if err != nil || string(out) != strings.Replace(src, "status: unverified\n", "", 1) {
+		t.Fatalf("%q %v", out, err)
+	}
+	out, err = DeleteKey([]byte(src), "tags")
+	if err != nil || string(out) != strings.Replace(src, "tags:\n  - a\n  - b\n", "", 1) {
+		t.Fatalf("a block value goes with its key: %q %v", out, err)
+	}
+	for _, same := range []string{src, "no frontmatter\n"} {
+		if out, err := DeleteKey([]byte(same), "absent"); err != nil || string(out) != same {
+			t.Fatalf("a missing key changes nothing: %q %v", out, err)
+		}
+	}
+	if _, err := DeleteKey([]byte("---\ntitle: [unclosed\n---\nbody\n"), "title"); err == nil {
+		t.Fatal("a malformed frontmatter block must not be rewritten")
+	}
+}

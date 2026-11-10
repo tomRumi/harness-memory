@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/tomRumi/harness-memory/internal/md"
+	"github.com/tomRumi/harness-memory/internal/store"
 )
 
 // writeNote writes a note file with a given created time, the way learn does, without going through learn.
@@ -335,5 +336,44 @@ func TestModelMessageHasInstructionThenInput(t *testing.T) {
 	head, input, ok := strings.Cut(m, "\nInput:\n")
 	if !ok || head != b.Prompt || strings.Contains(input, "prompt") || !strings.Contains(input, `"i1"`) {
 		t.Fatal(m)
+	}
+}
+
+// An unverified note is not handed out, and a submission that names it neither merges nor deletes it.
+func TestUnverifiedNoteIsNeitherPendingNorMerged(t *testing.T) {
+	st, _ := newStore(t)
+	ctx := context.Background()
+	notes := learnN(t, st, proj, 3, tmplWorker)
+	staged, err := st.LearnAs(ctx, "A staged observation about worker restarts that nobody has checked.", proj, "", "", &store.Writer{Author: "scout", Staged: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bs, err := Pending(ctx, st, proj, 0)
+	if err != nil || len(bs) != 1 || len(bs[0].Notes) != 3 {
+		t.Fatalf("%v %+v", err, bs)
+	}
+	for _, n := range bs[0].Notes {
+		if n.ID == staged {
+			t.Fatal("an unverified note was handed out")
+		}
+	}
+	rep, err := Submit(ctx, st, Submission{Project: proj, Pages: []Page{
+		{Title: "Workers", Summary: "w", Body: "# Workers\n\n" + bullets(notes[:2]), Notes: append(ids(notes[:2]), staged)},
+		{Title: "Others", Summary: "o", Body: "# Others\n\n" + bullets(notes[2:]), Notes: ids(notes[2:])},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Pages[0].Status != Stale || rep.Pages[1].Status != Merged {
+		t.Fatalf("%+v", rep.Pages)
+	}
+	if !exists(st, "notes/"+proj+"/"+staged+".md") || !strings.Contains(readFile(t, st, "notes/"+proj+"/"+staged+".md"), "status: unverified") {
+		t.Fatal("the unverified note was touched")
+	}
+	if exists(st, "wiki/"+proj+"/Workers.md") {
+		t.Fatal("a page naming an unverified note was written")
+	}
+	if got := noteCount(t, st, proj); got != 2 {
+		t.Fatalf("%d notes left, want the 2 of the stale page", got)
 	}
 }

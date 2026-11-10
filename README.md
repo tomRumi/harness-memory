@@ -43,7 +43,7 @@ git, and that tidies itself without a human deciding what to keep. Nothing we lo
 
 Goals:
 
-- **Harness and model independent.** One HTTP address on the machine, seven MCP tools. Nothing in the service knows
+- **Harness and model independent.** One HTTP address on the machine, eight MCP tools. Nothing in the service knows
   which agent calls it, and the service has no model of its own by default.
 - **Files are the record.** Everything the service knows is markdown in git. The search index and the vectors are caches
   that can be deleted and rebuilt (tested: the same state hash after a rebuild).
@@ -228,7 +228,7 @@ clean before it starts.
 Streamable HTTP through the official Go SDK, loopback only (other addresses are refused at start; a request with a foreign
 `Host` header gets 403, also on `/healthz`). With `HMS_TOKENS_DIR` set, `/mcp` also needs a bearer token (checked with the
 SDK's `auth.RequireBearerToken`) and every tool is limited to the projects that token is granted, see
-[reference.md](docs/reference.md#tokens). Seven tools:
+[reference.md](docs/reference.md#tokens). Eight tools:
 
 | Tool | Purpose |
 |---|---|
@@ -237,6 +237,7 @@ SDK's `auth.RequireBearerToken`) and every tool is limited to the projects that 
 | `wiki_read` | a page by path or title, with links, backlinks and related pages |
 | `fact_add` | save a durable fact |
 | `retire` | delete a wrong note or fact (git keeps it) |
+| `verify` | mark an unverified note as checked (token mode: needs the `verify` right) |
 | `feedback` | helpful / unhelpful per session; five sessions rating a note unhelpful, none helpful, lists it as a candidate for deletion |
 | `stats` | counts, vector state, notes waiting, commit health; the connection check |
 

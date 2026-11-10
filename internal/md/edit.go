@@ -36,7 +36,14 @@ func scalar(v any) string {
 // SetKeys changes or adds top-level keys in the frontmatter of src and leaves every other byte alone: comments, key
 // order, quoting, line endings and the body stay as they were. A file without frontmatter gets a new block. A file
 // whose frontmatter does not parse is refused (an error), never rewritten.
-func SetKeys(src []byte, set map[string]any) ([]byte, error) {
+func SetKeys(src []byte, set map[string]any) ([]byte, error) { return edit(src, set, "") }
+
+// DeleteKey removes a top-level key (with the lines of its value) from the frontmatter of src and leaves every other
+// byte alone. A file without that key is returned as it is; a frontmatter that does not parse is refused.
+func DeleteKey(src []byte, key string) ([]byte, error) { return edit(src, nil, key) }
+
+// edit is SetKeys, and with del set it also removes that key.
+func edit(src []byte, set map[string]any, del string) ([]byte, error) {
 	text := string(src)
 	nl := "\n"
 	if i := strings.Index(text, "\n"); i > 0 && text[i-1] == '\r' { // the opening delimiter line decides, not the body
@@ -55,6 +62,9 @@ func SetKeys(src []byte, set map[string]any) ([]byte, error) {
 		return out
 	}
 	if !strings.HasPrefix(text, "---"+nl) && !strings.HasPrefix(text, "---\n") {
+		if del != "" {
+			return src, nil
+		}
 		return []byte("---" + nl + strings.Join(lines(), nl) + nl + "---" + nl + text), nil
 	}
 	d := Parse(src)
@@ -73,18 +83,23 @@ func SetKeys(src []byte, set map[string]any) ([]byte, error) {
 		bl = nil
 	}
 	done := map[string]bool{}
-	drop := map[int]bool{} // continuation lines of a value that was replaced
+	drop := map[int]bool{}                           // continuation lines of a value that was replaced
+	match := append(keys[:len(keys):len(keys)], del) // the keys a line may belong to
 	for i := 0; i < len(bl); i++ {
 		l := bl[i]
-		for _, k := range keys {
-			if done[k] || !(strings.HasPrefix(l, k+":") || strings.HasPrefix(l, `"`+k+`":`) || strings.HasPrefix(l, "'"+k+"':")) {
+		for _, k := range match {
+			if k == "" || done[k] || !(strings.HasPrefix(l, k+":") || strings.HasPrefix(l, `"`+k+`":`) || strings.HasPrefix(l, "'"+k+"':")) {
 				continue
 			}
 			cr := ""
 			if strings.HasSuffix(l, "\r") {
 				cr = "\r"
 			}
-			bl[i] = k + ": " + scalar(set[k]) + cr // a quoted key becomes a plain one: the same key, once
+			if k == del {
+				drop[i] = true
+			} else {
+				bl[i] = k + ": " + scalar(set[k]) + cr // a quoted key becomes a plain one: the same key, once
+			}
 			done[k] = true
 			// a block or folded value goes on over indented lines; they belong to the old value. When the key has no
 			// value on its own line it is a block list, whose "- " lines may also start at column 0.

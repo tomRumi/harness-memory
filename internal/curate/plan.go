@@ -36,6 +36,7 @@ type world struct {
 	project, date string
 	notes         map[string]Note
 	pages         []pageFile
+	unverified    func(id string) bool   // the note is on disk and not checked yet
 	linkOK        func(link string) bool // the index's link rule
 	taken         func(rel string) bool  // anything at rel on disk
 	ignored       func(rel string) bool  // git would ignore rel
@@ -58,10 +59,13 @@ func (w *world) plan(sub Submission, ids [][]string) (jobs []*pageJob, unknown [
 	for i, p := range sub.Pages {
 		j := &pageJob{PageReport: PageReport{Title: p.Title}, in: p, fileTitle: p.Title}
 		jobs = append(jobs, j)
+		var waiting []string // named notes that are unverified
 		for _, id := range ids[i] {
 			if n, ok := w.notes[id]; ok && usableID(id) {
 				j.notes = append(j.notes, n)
 				j.Notes = append(j.Notes, id)
+			} else if usableID(id) && w.unverified(id) {
+				waiting = append(waiting, short(id))
 			} else if !seen[id] {
 				seen[id] = true
 				unknown = append(unknown, id)
@@ -69,6 +73,9 @@ func (w *world) plan(sub Submission, ids [][]string) (jobs []*pageJob, unknown [
 		}
 		if err := w.place(j, titles); err != nil {
 			return nil, nil, err
+		}
+		if len(waiting) > 0 && j.Status == "" { // the page would carry unchecked text: it and its notes stay as they are
+			j.mark(Stale, "names unverified notes ("+strings.Join(waiting, " ")+"); verify them first")
 		}
 	}
 	w.checkAll(jobs)
