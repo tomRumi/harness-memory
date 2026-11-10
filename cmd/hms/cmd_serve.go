@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/tomRumi/harness-memory/internal/access"
 	"github.com/tomRumi/harness-memory/internal/embed"
 	"github.com/tomRumi/harness-memory/internal/index"
 	"github.com/tomRumi/harness-memory/internal/install"
@@ -28,7 +29,13 @@ func cmdServe(p paths, rest []string) {
 		die("serve: %v", err)
 	}
 	if ip := net.ParseIP(host); host != "localhost" && (ip == nil || !ip.IsLoopback()) {
-		die("serve: %q is not a loopback address; the service has no authentication and listens on this machine only", *addr)
+		die("serve: %q is not a loopback address; the service listens on this machine only", *addr)
+	}
+	tokens := os.Getenv("HMS_TOKENS_DIR")
+	if tokens != "" { // token mode: a fault is fatal here, and refuses every request later; there is no fallback to open mode
+		if _, err := access.Load(tokens); err != nil {
+			die("serve: %v", err)
+		}
 	}
 	d := open(p)
 	defer d.Close()
@@ -51,6 +58,7 @@ func cmdServe(p paths, rest []string) {
 	if err != nil {
 		die("serve: %v", err)
 	}
+	srv.TokensDir = tokens
 	serveHTTP(srv, st, *addr)
 }
 

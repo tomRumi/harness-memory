@@ -117,7 +117,7 @@ export HMS_HOME=$HOME/.local/share/harness-memory-service
 ./hms init                       # creates the memory repository (with git) and the index, checks the embedder
 ./hms rescan                     # reads wiki/, notes/ and facts/
 ./hms recall -p myproject "how does the build work"
-./hms serve                      # MCP on http://127.0.0.1:8765/mcp, loopback only, no authentication
+./hms serve                      # MCP on http://127.0.0.1:8765/mcp, loopback only; no authentication unless HMS_TOKENS_DIR is set
 ```
 
 Vectors are on by default. `hms init` checks the embedder: with a local Ollama that has the model it says
@@ -134,6 +134,33 @@ shows `vectors: on (<model>), N of M chunks embedded`, `vectors: off` or `vector
 and every 60 seconds, without blocking writes or recall. `hms embed` does the same by hand. Other servers and models are
 set with `HMS_EMBED_API` (`ollama` or `openai`), `HMS_EMBED_URL` (default `http://localhost:11434`), `HMS_EMBED_MODEL`,
 `HMS_EMBED_KEY`. Vectors are cached in a separate file keyed by model and text, so a rebuilt index does not re-embed.
+
+## Tokens
+
+Setting `HMS_TOKENS_DIR` to a directory turns token mode on for `hms serve`. Unset, nothing changes: every caller on the
+machine may read and write. The `hms` commands (`recall`, `curate`, ...) are the local operator and are not limited.
+
+In token mode `/mcp` needs `Authorization: Bearer <token>`. A missing or unknown token gets 401 without detail. The
+directory holds one file per project, `<project>.json`:
+
+```json
+{"version":1,"project":"myproject","tokens":{"<sha256 of the token, 64 lower-case hex>":{"write":true,"verify":false,"learn_status":"","name":"short label"}}}
+```
+
+- All rights are optional: `write` and `verify` default to false, `learn_status` to `""` (the other value is
+  `"unverified"`). `verify` and `learn_status` are accepted and stored; no tool uses them yet. `name` is a label.
+- The same digest in several files grants each of those projects. Files are read again on every request. Names that start
+  with `.` are ignored (a writer's temporary file).
+- Every tool is limited to the token's projects. A named project must be granted (else `this token may not use project X`);
+  no project means the token's only project, and with several the call is refused and lists them. `recall` searches only
+  that project, and the `global` project only when the token is granted `global`. `wiki_read` reads only pages of granted
+  projects and its link lines list only those. `retire` and `feedback` find ids only in that project. `stats` counts only
+  it. `learn`, `fact_add` and `retire` need `write` in that project.
+- Fail closed: the directory missing, not a directory or writable by group or others, or a file writable by group or
+  others, not valid JSON, with an unknown key, a version other than 1, an invalid project name or one that is not its
+  file name, a key that is not 64 lower-case hex, or another `learn_status`: every request is refused with a 5xx that names
+  the file and the fault (never a digest or a token). `hms serve` checks the directory at start and exits with the same
+  reason. Make files with `chmod 600` and the directory `chmod 700`.
 
 ## Dependencies
 

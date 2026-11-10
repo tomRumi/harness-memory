@@ -12,7 +12,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/tomRumi/harness-memory/internal/access"
 	"github.com/tomRumi/harness-memory/internal/index"
 	"github.com/tomRumi/harness-memory/internal/store"
 	"github.com/tomRumi/harness-memory/internal/wiki"
@@ -34,6 +36,8 @@ type Server struct {
 	St  *store.Store
 	DB  *index.DB
 	Emb index.Embedder
+	// TokensDir, if set, turns token mode on: /mcp needs a bearer token listed in a file there (see package access).
+	TokensDir string
 
 	mu  sync.RWMutex
 	mat *index.Matrix
@@ -87,6 +91,8 @@ type RecallIn struct {
 	Project string `json:"project,omitempty" jsonschema:"project name; empty searches every project"`
 	Layer   string `json:"layer,omitempty" jsonschema:"auto (default), wiki, memory or fact"`
 	Budget  int    `json:"budget,omitempty" jsonschema:"maximum characters in the answer (0 means no limit)"`
+
+	noGlobal bool // leave out the pass over the global project (a token that is not granted it)
 }
 
 func label(h index.Hit) string {
@@ -216,7 +222,7 @@ func (s *Server) recall(ctx context.Context, in RecallIn) (lines []string, warn 
 	for _, p := range passes {
 		run(p.tag, p.kinds, proj, p.quota, "")
 	}
-	if proj != "" && proj != store.GlobalProject && (layer == "" || layer == "auto" || layer == "memory") {
+	if !in.noGlobal && proj != "" && proj != store.GlobalProject && (layer == "" || layer == "auto" || layer == "memory") {
 		var n int
 		s.DB.QueryRow(`SELECT count(*) FROM nodes WHERE kind IN ('note','fact') AND project = ?`, store.GlobalProject).Scan(&n)
 		if n > 0 {
@@ -378,66 +384,136 @@ type FeedbackIn struct {
 	Project string `json:"project,omitempty" jsonschema:"restrict the lookup to this project"`
 }
 
+// Rights returns the rights of the token of a call: nil in open mode, so that a caller can ask "is there a token" by
+// testing for nil. It is the accessor for the rights of the current call. In token mode a call without rights is an error, never open access.
+func (s *Server) Rights(req *mcp.CallToolRequest) (*access.Rights, error) {
+	if s.TokensDir == "" {
+		return nil, nil
+	}
+	if req != nil && req.Extra != nil {
+		if r := access.Of(req.Extra.TokenInfo); r != nil {
+			return r, nil
+		}
+	}
+	return nil, fmt.Errorf("this call carries no token rights; nothing was done")
+}
+
+// scope turns the project of a call into the project to use. In open mode it is the project as given (and the rights
+// are nil). In token mode it is the one the token may use (see access.Rights.Resolve), and write says the call
+// changes the memory, which needs the write right in that project.
+func (s *Server) scope(req *mcp.CallToolRequest, project string, write bool) (string, *access.Rights, error) {
+	r, err := s.Rights(req)
+	if r == nil || err != nil {
+		return project, nil, err
+	}
+	p, err := r.Resolve(project)
+	if err != nil {
+		return "", r, err
+	}
+	if write && !r.Grants[p].Write {
+		return "", r, fmt.Errorf("this token may not write to project %s; nothing was done", p)
+	}
+	return p, r, nil
+}
+
 // Handler builds the MCP HTTP handler. Each connection gets its own MCP server object over the shared state.
 func (s *Server) Handler() http.Handler {
 	build := func(*http.Request) *mcp.Server {
 		m := mcp.NewServer(&mcp.Implementation{Name: "harness-memory-service", Version: Version}, nil)
 		mcp.AddTool(m, &mcp.Tool{Name: "recall", Description: "Search the memory: wiki entries, notes and facts. Returns short hits with a path and, for notes, a #id to use with retire, feedback or learn(supersedes)."},
-			func(ctx context.Context, _ *mcp.CallToolRequest, in RecallIn) (*mcp.CallToolResult, any, error) {
+			func(ctx context.Context, req *mcp.CallToolRequest, in RecallIn) (*mcp.CallToolResult, any, error) {
+				proj, r, err := s.scope(req, in.Project, false)
+				if err != nil {
+					return nil, nil, err
+				}
+				in.Project, in.noGlobal = proj, r != nil && !r.Allows(store.GlobalProject)
 				return text(s.Recall(ctx, in))
 			})
 		mcp.AddTool(m, &mcp.Tool{Name: "learn", Description: "Store one learning (not routine actions). Idempotent: the same text returns the same id. kind is an optional short label such as topic:type; it is informational only and does not decide where the note is merged."},
-			func(ctx context.Context, _ *mcp.CallToolRequest, in LearnIn) (*mcp.CallToolResult, any, error) {
-				id, err := s.St.Learn(ctx, in.Text, in.Project, in.Kind, in.Supersedes)
+			func(ctx context.Context, req *mcp.CallToolRequest, in LearnIn) (*mcp.CallToolResult, any, error) {
+				proj, _, err := s.scope(req, in.Project, true)
+				if err != nil {
+					return nil, nil, err
+				}
+				id, err := s.St.Learn(ctx, in.Text, proj, in.Kind, in.Supersedes)
 				if err != nil {
 					return nil, nil, err
 				}
 				return text(id)
 			})
 		mcp.AddTool(m, &mcp.Tool{Name: "wiki_read", Description: "Read one wiki page in full by its path under wiki/ or by its title. The answer ends with the pages it links to, the pages that link to it and the pages related to it by meaning."},
-			func(ctx context.Context, _ *mcp.CallToolRequest, in WikiReadIn) (*mcp.CallToolResult, any, error) {
-				t, err := s.St.WikiRead(in.Path)
+			func(ctx context.Context, req *mcp.CallToolRequest, in WikiReadIn) (*mcp.CallToolResult, any, error) {
+				r, err := s.Rights(req)
+				if err != nil {
+					return nil, nil, err
+				}
+				var allow func(string) bool
+				if r != nil {
+					allow = r.Allows
+				}
+				t, err := s.St.WikiReadFor(in.Path, allow)
 				if err != nil {
 					return nil, nil, err
 				}
 				return text(t)
 			})
 		mcp.AddTool(m, &mcp.Tool{Name: "fact_add", Description: "Store one durable fact (preference, decision, environment)."},
-			func(ctx context.Context, _ *mcp.CallToolRequest, in FactIn) (*mcp.CallToolResult, any, error) {
-				id, err := s.St.AddFact(ctx, in.Text, in.Project, in.Category, in.Trust)
+			func(ctx context.Context, req *mcp.CallToolRequest, in FactIn) (*mcp.CallToolResult, any, error) {
+				proj, _, err := s.scope(req, in.Project, true)
+				if err != nil {
+					return nil, nil, err
+				}
+				id, err := s.St.AddFact(ctx, in.Text, proj, in.Category, in.Trust)
 				if err != nil {
 					return nil, nil, err
 				}
 				return text(id)
 			})
 		mcp.AddTool(m, &mcp.Tool{Name: "retire", Description: "Delete a note or fact that is wrong or no longer applies. The file is removed and git history keeps its text. An unknown or ambiguous id changes nothing."},
-			func(ctx context.Context, _ *mcp.CallToolRequest, in RetireIn) (*mcp.CallToolResult, any, error) {
-				t, err := s.St.Retire(ctx, in.ID, in.Reason, in.Project)
+			func(ctx context.Context, req *mcp.CallToolRequest, in RetireIn) (*mcp.CallToolResult, any, error) {
+				proj, _, err := s.scope(req, in.Project, true)
+				if err != nil {
+					return nil, nil, err
+				}
+				t, err := s.St.Retire(ctx, in.ID, in.Reason, proj)
 				if err != nil {
 					return nil, nil, err
 				}
 				return text(t)
 			})
 		mcp.AddTool(m, &mcp.Tool{Name: "feedback", Description: "Say whether a recalled note helped (helpful or unhelpful). A session name is required; each session counts once."},
-			func(ctx context.Context, _ *mcp.CallToolRequest, in FeedbackIn) (*mcp.CallToolResult, any, error) {
+			func(ctx context.Context, req *mcp.CallToolRequest, in FeedbackIn) (*mcp.CallToolResult, any, error) {
+				proj, _, err := s.scope(req, in.Project, false)
+				if err != nil {
+					return nil, nil, err
+				}
 				r := strings.ToLower(strings.TrimSpace(in.Rating))
 				if r != "helpful" && r != "unhelpful" {
 					return text(fmt.Sprintf("rating must be helpful or unhelpful, not %q — nothing recorded", in.Rating))
 				}
-				t, err := s.St.Feedback(in.ID, r == "helpful", in.Project, in.Session)
+				t, err := s.St.Feedback(in.ID, r == "helpful", proj, in.Session)
 				if err != nil {
 					return nil, nil, err
 				}
 				return text(t)
 			})
 		mcp.AddTool(m, &mcp.Tool{Name: "stats", Description: "Counts per layer, embedder and commit health. Use it as the connection check."},
-			func(ctx context.Context, _ *mcp.CallToolRequest, in StatsIn) (*mcp.CallToolResult, any, error) {
+			func(ctx context.Context, req *mcp.CallToolRequest, in StatsIn) (*mcp.CallToolResult, any, error) {
+				proj, _, err := s.scope(req, in.Project, false)
+				if err != nil {
+					return nil, nil, err
+				}
+				in.Project = proj
 				return text(s.Stats(ctx, in))
 			})
 		return m
 	}
 	mux := http.NewServeMux()
-	mux.Handle("/mcp", mcp.NewStreamableHTTPHandler(build, &mcp.StreamableHTTPOptions{SessionTimeout: 30 * time.Minute}))
+	var mcpHandler http.Handler = mcp.NewStreamableHTTPHandler(build, &mcp.StreamableHTTPOptions{SessionTimeout: 30 * time.Minute})
+	if s.TokensDir != "" { // token mode: the SDK's own middleware, a token file check on every request
+		mcpHandler = auth.RequireBearerToken(access.Verifier(s.TokensDir), &auth.RequireBearerTokenOptions{AllowMissingExpiration: true})(mcpHandler)
+	}
+	mux.Handle("/mcp", mcpHandler)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		if !loopbackHost(r.Host) { // the same check as /mcp: a page in a browser must not read the stats of this machine
 			http.Error(w, "forbidden host", http.StatusForbidden)

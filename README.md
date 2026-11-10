@@ -52,8 +52,8 @@ Goals:
 - **Honest failure.** Embedder down, git blocked, a bad merge: the service says so in the answer that is affected, and the
   data stays where it was.
 
-Non-goals: it is not an agent, a chat UI, a code indexer, a hosted service, or a multi-user server (it has no
-authentication and listens on the loopback interface only).
+Non-goals: it is not an agent, a chat UI, a code indexer, a hosted service, or a multi-user server (by default it has no
+authentication; access tokens per project are optional; it listens on the loopback interface only).
 
 ## 2. The problems and the answers
 
@@ -226,7 +226,9 @@ clean before it starts.
 ### 4.7 MCP surface
 
 Streamable HTTP through the official Go SDK, loopback only (other addresses are refused at start; a request with a foreign
-`Host` header gets 403, also on `/healthz`). Seven tools:
+`Host` header gets 403, also on `/healthz`). With `HMS_TOKENS_DIR` set, `/mcp` also needs a bearer token (checked with the
+SDK's `auth.RequireBearerToken`) and every tool is limited to the projects that token is granted, see
+[reference.md](docs/reference.md#tokens). Seven tools:
 
 | Tool | Purpose |
 |---|---|
@@ -257,6 +259,7 @@ Streamable HTTP through the official Go SDK, loopback only (other addresses are 
 | `internal/store` | write paths (`Do`/`Tx`), committer, lock, embedding worker, repository state, `wiki_read` |
 | `internal/index` | schema, rescan, keyword and hybrid recall, vectors, page vectors, link resolution |
 | `internal/curate` | pending, the pure `plan`, the checks, `apply`, the model protocol and the optional built-in client |
+| `internal/access` | token files: loading, checking, the rights of a call |
 | `internal/wiki` | title, project and path rules; link syntax; folding |
 | `internal/md` | frontmatter reader/editor that keeps the rest of a file byte-identical; fences |
 | `internal/chunk` | splitting text into indexed pieces |
@@ -265,7 +268,7 @@ Streamable HTTP through the official Go SDK, loopback only (other addresses are 
 | `internal/server` | the MCP tools and the context block for hooks |
 
 Settings are environment variables (`HMS_HOME`, `HMS_EMBED_API/URL/MODEL/KEY`, `HMS_VECTORS`, and for the optional
-built-in merge model `HMS_LLM_URL/MODEL/KEY/TIMEOUT`). There is no settings file.
+built-in merge model `HMS_LLM_URL/MODEL/KEY/TIMEOUT`; `HMS_TOKENS_DIR` turns on access tokens). There is no settings file.
 
 ## 5. Why Go, and what else was considered
 
@@ -315,7 +318,9 @@ No other language was evaluated. The libraries are few: `modernc.org/sqlite`, th
 
 ## 8. Limits and known risks
 
-- Loopback only and no authentication: not for shared hosts.
+- Loopback only. Without `HMS_TOKENS_DIR` there is no authentication: anything on the machine can read and write. With it,
+  tokens limit each caller to its projects, but they are plain bearer tokens over HTTP on loopback, not a defence against
+  a hostile local user.
 - No Windows build is claimed; the cross-process lock is a no-op there.
 - Not yet run: the hook inside Claude Code itself, and the wiki inside Obsidian (the rules Obsidian needs are covered by a
   test). No continuous integration yet.

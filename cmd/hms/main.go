@@ -42,6 +42,7 @@ usage: hms [--home DIR] [--repo DIR] [--db FILE] <command> [arguments]
 
 HMS_HOME, HMS_REPO and HMS_DB set the same locations. The embedding model is set with HMS_EMBED_API (ollama or openai),
 HMS_EMBED_URL, HMS_EMBED_MODEL and HMS_EMBED_KEY; the default is nomic-embed-text on a local Ollama. Default home: $XDG_DATA_HOME/harness-memory-service.
+HMS_TOKENS_DIR turns on access tokens for serve (one file per project; see docs/reference.md).
 `
 
 type paths struct{ home, repo, db string }
