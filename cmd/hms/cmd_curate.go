@@ -10,11 +10,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/tomRumi/harness-memory-service/internal/curate"
-	"github.com/tomRumi/harness-memory-service/internal/embed"
-	"github.com/tomRumi/harness-memory-service/internal/index"
-	"github.com/tomRumi/harness-memory-service/internal/install"
-	"github.com/tomRumi/harness-memory-service/internal/store"
+	"github.com/tomRumi/harness-memory/internal/curate"
+	"github.com/tomRumi/harness-memory/internal/embed"
+	"github.com/tomRumi/harness-memory/internal/index"
+	"github.com/tomRumi/harness-memory/internal/install"
+	"github.com/tomRumi/harness-memory/internal/store"
 )
 
 const curateUsage = "usage: hms curate | hms curate -pending [-p P] [-max N] | hms curate -submit FILE|- [-p P] | hms curate -apply [-p P] [-max N]"

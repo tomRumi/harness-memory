@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tomRumi/harness-memory-service/internal/index"
+	"github.com/tomRumi/harness-memory/internal/index"
 )
 
 func staged(t *testing.T, repo string) string {

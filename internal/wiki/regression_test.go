@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tomRumi/harness-memory-service/internal/md"
+	"github.com/tomRumi/harness-memory/internal/md"
 )
 
 func TestValidTitleBytes(t *testing.T) {

@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tomRumi/harness-memory-service/internal/embed"
-	"github.com/tomRumi/harness-memory-service/internal/index"
-	"github.com/tomRumi/harness-memory-service/internal/store"
-	"github.com/tomRumi/harness-memory-service/internal/wiki"
+	"github.com/tomRumi/harness-memory/internal/embed"
+	"github.com/tomRumi/harness-memory/internal/index"
+	"github.com/tomRumi/harness-memory/internal/store"
+	"github.com/tomRumi/harness-memory/internal/wiki"
 )
 
 // Doctor runs the checks, prints one line each (OK, WARN or FAIL) and changes nothing. It returns the number of FAILs.

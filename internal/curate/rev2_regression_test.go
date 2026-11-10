@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tomRumi/harness-memory-service/internal/md"
-	"github.com/tomRumi/harness-memory-service/internal/store"
+	"github.com/tomRumi/harness-memory/internal/md"
+	"github.com/tomRumi/harness-memory/internal/store"
 )
 
 // allWiki is the text of every wiki file except the generated Index.

@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tomRumi/harness-memory-service/internal/index"
+	"github.com/tomRumi/harness-memory/internal/index"
 )
 
 type bag struct {

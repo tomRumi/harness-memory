@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tomRumi/harness-memory-service/internal/wiki"
+	"github.com/tomRumi/harness-memory/internal/wiki"
 )
 
 // Committer is the only thing that runs git commit in the memory repository. Writers call Notify with the files they

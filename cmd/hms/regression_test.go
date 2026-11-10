@@ -11,7 +11,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/tomRumi/harness-memory-service/internal/curate"
+	"github.com/tomRumi/harness-memory/internal/curate"
 )
 
 // Item 5: -p PROJ means proj; nothing named PROJ is ever made.

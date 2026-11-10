@@ -2,7 +2,7 @@ package store
 
 import (
 	"fmt"
-	"github.com/tomRumi/harness-memory-service/internal/wiki"
+	"github.com/tomRumi/harness-memory/internal/wiki"
 	"os"
 	"path/filepath"
 	"sort"

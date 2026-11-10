@@ -2,7 +2,7 @@ package store
 
 import (
 	"fmt"
-	"github.com/tomRumi/harness-memory-service/internal/index"
+	"github.com/tomRumi/harness-memory/internal/index"
 	"os"
 	"path/filepath"
 	"strings"

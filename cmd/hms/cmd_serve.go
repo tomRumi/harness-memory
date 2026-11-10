@@ -11,11 +11,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/tomRumi/harness-memory-service/internal/embed"
-	"github.com/tomRumi/harness-memory-service/internal/index"
-	"github.com/tomRumi/harness-memory-service/internal/install"
-	"github.com/tomRumi/harness-memory-service/internal/server"
-	"github.com/tomRumi/harness-memory-service/internal/store"
+	"github.com/tomRumi/harness-memory/internal/embed"
+	"github.com/tomRumi/harness-memory/internal/index"
+	"github.com/tomRumi/harness-memory/internal/install"
+	"github.com/tomRumi/harness-memory/internal/server"
+	"github.com/tomRumi/harness-memory/internal/store"
 )
 
 func cmdServe(p paths, rest []string) {

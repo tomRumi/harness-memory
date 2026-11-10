@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/tomRumi/harness-memory-service/internal/wiki"
+	"github.com/tomRumi/harness-memory/internal/wiki"
 )
 
 // Upsert re-reads one markdown file of the repository (rel is its path under the repository, for example

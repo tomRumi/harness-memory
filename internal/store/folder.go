@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/tomRumi/harness-memory-service/internal/wiki"
+	"github.com/tomRumi/harness-memory/internal/wiki"
 )
 
 // OddFolders lists the entries of tree (wiki, notes or facts) that are not spelled as a canonical project name: names

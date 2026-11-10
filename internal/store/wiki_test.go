@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tomRumi/harness-memory-service/internal/index"
+	"github.com/tomRumi/harness-memory/internal/index"
 )
 
 // putPage writes a wiki page the way a hand edit or the later merge flow does (a file), then lets the store index it

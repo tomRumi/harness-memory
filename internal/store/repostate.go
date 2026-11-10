@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tomRumi/harness-memory-service/internal/wiki"
+	"github.com/tomRumi/harness-memory/internal/wiki"
 )
 
 // RepoState says whether the repository lets commits through. The committer and `hms doctor` ask this one place.

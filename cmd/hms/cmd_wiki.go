@@ -8,8 +8,8 @@ import (
 	"io"
 	"strings"
 
-	"github.com/tomRumi/harness-memory-service/internal/index"
-	"github.com/tomRumi/harness-memory-service/internal/store"
+	"github.com/tomRumi/harness-memory/internal/index"
+	"github.com/tomRumi/harness-memory/internal/store"
 )
 
 const wikiUsage = "usage: hms wiki links [-p project] | hms wiki index [-p project] | hms wiki related <page> [-n N] [-p project] | hms wiki duplicates [-p project] [-t threshold] | hms wiki eval-pairs -pairs FILE"

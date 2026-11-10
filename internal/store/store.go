@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tomRumi/harness-memory-service/internal/index"
-	"github.com/tomRumi/harness-memory-service/internal/wiki"
+	"github.com/tomRumi/harness-memory/internal/index"
+	"github.com/tomRumi/harness-memory/internal/wiki"
 	_ "modernc.org/sqlite"
 )
 

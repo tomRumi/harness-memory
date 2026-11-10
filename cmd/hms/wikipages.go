@@ -8,8 +8,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/tomRumi/harness-memory-service/internal/embed"
-	"github.com/tomRumi/harness-memory-service/internal/index"
+	"github.com/tomRumi/harness-memory/internal/embed"
+	"github.com/tomRumi/harness-memory/internal/index"
 )
 
 // pagesFlags are the arguments of `hms wiki related`, `duplicates` and `eval-pairs`.

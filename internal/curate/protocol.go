@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/tomRumi/harness-memory-service/internal/store"
+	"github.com/tomRumi/harness-memory/internal/store"
 )
 
 // Page is one page of a model answer: the whole new body of a page, and the notes it takes in. The same shape

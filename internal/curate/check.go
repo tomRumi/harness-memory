@@ -9,8 +9,8 @@ import (
 
 	"golang.org/x/text/unicode/norm"
 
-	"github.com/tomRumi/harness-memory-service/internal/md"
-	"github.com/tomRumi/harness-memory-service/internal/wiki"
+	"github.com/tomRumi/harness-memory/internal/md"
+	"github.com/tomRumi/harness-memory/internal/wiki"
 )
 
 // Window is the number of consecutive words of a note that must survive verbatim in the page.

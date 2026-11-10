@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/tomRumi/harness-memory-service/internal/wiki"
+	"github.com/tomRumi/harness-memory/internal/wiki"
 )
 
 // Link states kept on a body link edge. The raw link text stays in object_ref; resolved holds the node id of the

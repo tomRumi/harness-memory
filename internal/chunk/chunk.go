@@ -4,7 +4,7 @@ package chunk
 import (
 	"strings"
 
-	"github.com/tomRumi/harness-memory-service/internal/md"
+	"github.com/tomRumi/harness-memory/internal/md"
 )
 
 // WikiCap is the most characters one chunk of a wiki section may hold; a longer section is cut.

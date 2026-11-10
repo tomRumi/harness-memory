@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tomRumi/harness-memory-service/internal/index"
-	"github.com/tomRumi/harness-memory-service/internal/wiki"
+	"github.com/tomRumi/harness-memory/internal/index"
+	"github.com/tomRumi/harness-memory/internal/wiki"
 )
 
 // hung is an embedder that never answers until its context ends.

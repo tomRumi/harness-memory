@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tomRumi/harness-memory-service/internal/store"
-	"github.com/tomRumi/harness-memory-service/internal/wiki"
+	"github.com/tomRumi/harness-memory/internal/store"
+	"github.com/tomRumi/harness-memory/internal/wiki"
 )
 
 func TestSubmitHappyPathTwelveNotesIntoTwoPagesOneCommit(t *testing.T) {

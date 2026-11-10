@@ -12,7 +12,7 @@ import (
 	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
 
-	"github.com/tomRumi/harness-memory-service/internal/md"
+	"github.com/tomRumi/harness-memory/internal/md"
 )
 
 // IndexTitle is the title and file name (without .md) of the generated index page of a project. It is reserved:

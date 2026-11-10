@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tomRumi/harness-memory-service/internal/index"
-	"github.com/tomRumi/harness-memory-service/internal/md"
-	"github.com/tomRumi/harness-memory-service/internal/store"
+	"github.com/tomRumi/harness-memory/internal/index"
+	"github.com/tomRumi/harness-memory/internal/md"
+	"github.com/tomRumi/harness-memory/internal/store"
 )
 
 // bag is a fake embedder: a hashed bag of words, so texts that share words are close.

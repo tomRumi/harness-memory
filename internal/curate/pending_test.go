@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tomRumi/harness-memory-service/internal/md"
+	"github.com/tomRumi/harness-memory/internal/md"
 )
 
 // writeNote writes a note file with a given created time, the way learn does, without going through learn.

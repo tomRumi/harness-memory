@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tomRumi/harness-memory-service/internal/wiki"
+	"github.com/tomRumi/harness-memory/internal/wiki"
 )
 
 // Page vectors are CENTRED: the mean of all page vectors is subtracted and the result is normalised again. Pages of one

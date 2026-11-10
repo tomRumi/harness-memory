@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tomRumi/harness-memory-service/internal/index"
-	"github.com/tomRumi/harness-memory-service/internal/md"
-	"github.com/tomRumi/harness-memory-service/internal/store"
+	"github.com/tomRumi/harness-memory/internal/index"
+	"github.com/tomRumi/harness-memory/internal/md"
+	"github.com/tomRumi/harness-memory/internal/store"
 )
 
 // textSomewhere: the note file exists, or its whole flat text is in some wiki file of the repo.

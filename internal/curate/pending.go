@@ -12,10 +12,10 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/tomRumi/harness-memory-service/internal/index"
-	"github.com/tomRumi/harness-memory-service/internal/md"
-	"github.com/tomRumi/harness-memory-service/internal/store"
-	"github.com/tomRumi/harness-memory-service/internal/wiki"
+	"github.com/tomRumi/harness-memory/internal/index"
+	"github.com/tomRumi/harness-memory/internal/md"
+	"github.com/tomRumi/harness-memory/internal/store"
+	"github.com/tomRumi/harness-memory/internal/wiki"
 )
 
 const (

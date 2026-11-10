@@ -1,4 +1,4 @@
-module github.com/tomRumi/harness-memory-service
+module github.com/tomRumi/harness-memory
 
 go 1.26.0
 

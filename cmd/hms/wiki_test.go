@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tomRumi/harness-memory-service/internal/md"
-	"github.com/tomRumi/harness-memory-service/internal/wiki"
+	"github.com/tomRumi/harness-memory/internal/md"
+	"github.com/tomRumi/harness-memory/internal/wiki"
 )
 
 // wikiFixture builds a small wiki under a throwaway home: a page with spaces and accents in its title, one broken

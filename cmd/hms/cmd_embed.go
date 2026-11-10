@@ -5,13 +5,13 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"github.com/tomRumi/harness-memory-service/internal/index"
+	"github.com/tomRumi/harness-memory/internal/index"
 	"os"
 	"runtime"
 	"sort"
 	"time"
 
-	"github.com/tomRumi/harness-memory-service/internal/embed"
+	"github.com/tomRumi/harness-memory/internal/embed"
 )
 
 func cmdEmbed(p paths, rest []string) {

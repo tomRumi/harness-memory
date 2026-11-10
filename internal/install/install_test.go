@@ -13,8 +13,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/tomRumi/harness-memory-service/internal/embed"
-	"github.com/tomRumi/harness-memory-service/internal/index"
+	"github.com/tomRumi/harness-memory/internal/embed"
+	"github.com/tomRumi/harness-memory/internal/index"
 )
 
 // fakeOllama imitates GET /api/tags, POST /api/embed and POST /api/pull.

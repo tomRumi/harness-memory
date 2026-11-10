@@ -13,9 +13,9 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/tomRumi/harness-memory-service/internal/chunk"
-	"github.com/tomRumi/harness-memory-service/internal/md"
-	"github.com/tomRumi/harness-memory-service/internal/wiki"
+	"github.com/tomRumi/harness-memory/internal/chunk"
+	"github.com/tomRumi/harness-memory/internal/md"
+	"github.com/tomRumi/harness-memory/internal/wiki"
 )
 
 // Relations that frontmatter may declare. Anything else in frontmatter is ignored by the edge extractor.

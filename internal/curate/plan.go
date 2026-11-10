@@ -3,9 +3,9 @@ package curate
 import (
 	"strings"
 
-	"github.com/tomRumi/harness-memory-service/internal/md"
-	"github.com/tomRumi/harness-memory-service/internal/store"
-	"github.com/tomRumi/harness-memory-service/internal/wiki"
+	"github.com/tomRumi/harness-memory/internal/md"
+	"github.com/tomRumi/harness-memory/internal/store"
+	"github.com/tomRumi/harness-memory/internal/wiki"
 )
 
 // pageJob is one submitted page. Its report entry is its only state: Status is empty while the page passes every

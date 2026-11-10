@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tomRumi/harness-memory-service/internal/store"
+	"github.com/tomRumi/harness-memory/internal/store"
 )
 
 // synBag is a fake embedder that knows meanings: every word of a concept (car, automobile, truck ...) adds to one

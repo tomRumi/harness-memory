@@ -8,10 +8,10 @@ import (
 	"os"
 	"sort"
 
-	"github.com/tomRumi/harness-memory-service/internal/embed"
-	"github.com/tomRumi/harness-memory-service/internal/index"
-	"github.com/tomRumi/harness-memory-service/internal/install"
-	"github.com/tomRumi/harness-memory-service/internal/server"
+	"github.com/tomRumi/harness-memory/internal/embed"
+	"github.com/tomRumi/harness-memory/internal/index"
+	"github.com/tomRumi/harness-memory/internal/install"
+	"github.com/tomRumi/harness-memory/internal/server"
 )
 
 func cmdInit(p paths, rest []string) {

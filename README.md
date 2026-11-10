@@ -1,4 +1,4 @@
-# harness-memory-service
+# harness-memory
 
 A memory for AI agents that outlives the chat. Notes, facts and wiki pages are plain markdown files in a git repository.
 Any agent tool that speaks MCP can read and write them. The wiki is written by the agents themselves and opens in
@@ -70,4 +70,4 @@ Obsidian needs are checked by a test), Windows. There is no continuous integrati
 
 ## Licence
 
-To be chosen before the first public release.
+Apache-2.0. See [LICENSE](LICENSE).
