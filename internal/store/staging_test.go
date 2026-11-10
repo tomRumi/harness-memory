@@ -21,7 +21,7 @@ func staged(t *testing.T, repo string) string {
 }
 
 // A page that cannot be added (mode 000) must not leave the note deletion staged for another committer to carry.
-func TestRev3_PartialAddCommittedByOtherCommitter(t *testing.T) {
+func TestPartialAddCommittedByOtherCommitter(t *testing.T) {
 	st, _, repo := newStore(t)
 	id, _ := st.Learn(context.Background(), "A note whose page cannot be added by the first committer.", "p", "", "")
 	st.Commit.Flush()
@@ -43,7 +43,7 @@ func TestRev3_PartialAddCommittedByOtherCommitter(t *testing.T) {
 }
 
 // git add of an ignored path stages the other paths and then fails: the staged half must be taken out again.
-func TestRev3_AddFailureUnstagesTheOtherPaths(t *testing.T) {
+func TestAddFailureUnstagesTheOtherPaths(t *testing.T) {
 	st, _, repo := newStore(t)
 	id, _ := st.Learn(context.Background(), "A note that moves into a page that git ignores.", "p", "", "")
 	st.Commit.Flush()
@@ -61,7 +61,7 @@ func TestRev3_AddFailureUnstagesTheOtherPaths(t *testing.T) {
 	}
 }
 
-func TestRev3_FailedCommitUnstages(t *testing.T) {
+func TestFailedCommitUnstages(t *testing.T) {
 	st, _, repo := newStore(t)
 	hook := filepath.Join(repo, ".git", "hooks", "pre-commit")
 	os.MkdirAll(filepath.Dir(hook), 0o755)
@@ -77,7 +77,7 @@ func TestRev3_FailedCommitUnstages(t *testing.T) {
 }
 
 // A kill during git commit leaves staged files that are neither modified nor untracked: Sweep must see them.
-func TestRev3_SweepSeesStagedLeftovers(t *testing.T) {
+func TestSweepSeesStagedLeftovers(t *testing.T) {
 	st, _, repo := newStore(t)
 	id, _ := st.Learn(context.Background(), "A note that was moved into a page before the kill.", "p", "", "")
 	st.Commit.Flush()
@@ -98,7 +98,7 @@ func TestRev3_SweepSeesStagedLeftovers(t *testing.T) {
 
 // Sweep of a second store on the same home waits for a Do of the first (same lock file); it never commits a half way
 // operation that is then rolled back.
-func TestRev3_SweepWaitsForADo(t *testing.T) {
+func TestSweepWaitsForADo(t *testing.T) {
 	st, _, repo := newStore(t)
 	id, _ := st.Learn(context.Background(), "A note that a merge moves into a page.", "p", "", "")
 	st.Commit.Flush()
@@ -146,7 +146,7 @@ func TestRev3_SweepWaitsForADo(t *testing.T) {
 	}
 }
 
-func TestRev3_GitHasATimeout(t *testing.T) {
+func TestGitHasATimeout(t *testing.T) {
 	repo := t.TempDir()
 	if _, err := Git(repo, "init", "-q"); err != nil {
 		t.Fatal(err)

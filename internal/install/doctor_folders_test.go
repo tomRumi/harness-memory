@@ -16,7 +16,7 @@ func doctorFoldersLines(t *testing.T, repo string) string {
 }
 
 // Fourth review: doctor names every project folder that is not spelled as a project name, with the fix.
-func TestRev4_DoctorNamesCapitalAndInvalidFolders(t *testing.T) {
+func TestDoctorNamesCapitalAndInvalidFolders(t *testing.T) {
 	repo := t.TempDir()
 	exec.Command("git", "-C", repo, "init", "-q", "-b", "main").Run()
 	if got := doctorFoldersLines(t, repo); !strings.HasPrefix(got, "OK memory folders") {
@@ -42,7 +42,7 @@ func TestRev4_DoctorNamesCapitalAndInvalidFolders(t *testing.T) {
 }
 
 // Fourth review: git ignoring notes/, wiki/ or facts/ refuses every save, so doctor says so.
-func TestRev4_DoctorWarnsWhenGitIgnoresAMemoryFolder(t *testing.T) {
+func TestDoctorWarnsWhenGitIgnoresAMemoryFolder(t *testing.T) {
 	repo := t.TempDir()
 	exec.Command("git", "-C", repo, "init", "-q", "-b", "main").Run()
 	os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("notes/\n"), 0o644)
@@ -53,7 +53,7 @@ func TestRev4_DoctorWarnsWhenGitIgnoresAMemoryFolder(t *testing.T) {
 }
 
 // The whole command prints the lines (doctor is wired to them) and a lower-case repository stays free of WARNs.
-func TestRev4_DoctorPrintsTheFolderLines(t *testing.T) {
+func TestDoctorPrintsTheFolderLines(t *testing.T) {
 	home := t.TempDir()
 	p := Paths{Repo: filepath.Join(home, "memory"), DB: filepath.Join(home, "index.db")}
 	os.MkdirAll(filepath.Join(p.Repo, "wiki", "MyProj"), 0o755)

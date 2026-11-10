@@ -7,8 +7,8 @@ import (
 	"time"
 )
 
-// Reviewer cases for CheckPage. want: true = the design wants it accepted.
-func TestReviewCheckPageCases(t *testing.T) {
+// Cases for CheckPage. want: true = the design wants it accepted.
+func TestCheckPageCases(t *testing.T) {
 	note := Note{ID: "n1", Text: "The worker restarts after 5 failed health checks and then pages the on-call owner."}
 	run := "The worker restarts after 5 failed health checks and then pages the on-call owner."
 	old := "# Ops\n\nFirst line about the service.\nSecond line about the service.\n\n## Ports\n\nThe daemon listens on 8765.\n"
@@ -77,7 +77,7 @@ func TestReviewCheckPageCases(t *testing.T) {
 }
 
 // C26: links between new pages of one submission, where the target fails; the linking page must be refused too.
-func TestReviewCheckChainedLinks(t *testing.T) {
+func TestCheckChainedLinks(t *testing.T) {
 	st, _ := newStore(t)
 	ns := learnN(t, st, proj, 3, tmplWorker)
 	rep, err := Submit(context.Background(), st, Submission{Project: proj, Pages: []Page{

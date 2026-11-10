@@ -30,7 +30,7 @@ usage: hms [--home DIR] [--repo DIR] [--db FILE] <command> [arguments]
   wiki links [-p P]            list broken and ambiguous [[links]] of wiki pages (one line each, then a summary); exit 0
   wiki index [-p P]            write wiki/<project>/Index.md (all projects without -p) when its content changed, and commit it
   wiki related <page> [-n 5] [-p P]  the pages closest in meaning to a page (title or path): score, [[Title]], summary
-  wiki duplicates [-p P] [-t T]  pairs of pages that look like copies (cosine of page vectors >= T, default 0.92)
+  wiki duplicates [-p P] [-t T]  pairs of pages that look like copies (cosine of page vectors >= T; the output states the threshold used)
   wiki eval-pairs -pairs FILE  score related, unrelated and duplicate page pairs against the current vectors; read only; exit 0
   curate                       notes waiting per project and the age of the oldest (read only)
   curate -pending [-p P] [-max N]  the batches to merge as JSON: notes, page titles, related pages, instructions

@@ -28,10 +28,9 @@ questions about earlier work and `learn` for conclusions worth keeping.
 
 ## What was tested
 
-Hermes discovered the tool of a test Go HTTP MCP server built with the library this service uses; the real service was not registered in Hermes. The weekly
-merge job was run twice by a Hermes agent (Sonnet 5.5, default tools) on a copy of a real wiki with 10 waiting notes. First
-with the early prompt: 1 minute 5 seconds, 14 tool calls. Then with the prompt as it stood after the independent reviews:
-1 minute 48 seconds, 27 tool calls; its first submit listed the notes by shortened ids, the service answered "unknown" and
-changed nothing, and the agent retried with the full ids (the prompt now says to copy ids in full). Both runs ended with
-10 notes merged into 4 pages, none to `Unsorted`, one commit, no notes left waiting. The job was not installed in a live
-Hermes.
+The MCP configuration format is taken from Hermes' own documentation. The weekly merge job was run by a Hermes agent
+with a hosted model on a sample wiki with 10 waiting notes, using the job prompt from
+[curation-by-a-harness.md](../curation-by-a-harness.md): about 1 to 2 minutes, 10 notes merged into 4 pages, none to
+`Unsorted`, one commit, no notes left waiting. In one of two runs the agent first listed notes by shortened ids; the
+service answered "unknown" and changed nothing, and the agent retried with the full ids (the prompt now says to copy ids
+in full). The job was not installed in a live Hermes, and the service was not registered in one.

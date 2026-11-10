@@ -9,7 +9,7 @@ import (
 
 // Fourth review, e12 through the real CLI: a hand-made, committed wiki/Proj folder (capital letters) makes the merge
 // and `wiki index` refuse with the rename instruction, exit status 1, nothing changed.
-func TestRev4_CapitalFolderRefusedByTheCLI(t *testing.T) {
+func TestCapitalFolderRefusedByTheCLI(t *testing.T) {
 	home, repo, ids := curateFixture(t)
 	os.MkdirAll(filepath.Join(repo, "wiki", "Proj"), 0o755)
 	os.WriteFile(filepath.Join(repo, "wiki", "Proj", "Old.md"), []byte("# Old\n\nWritten by hand.\n"), 0o644)

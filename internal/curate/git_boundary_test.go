@@ -13,7 +13,7 @@ import (
 
 // Cherokee letters: the file system (APFS) folds them, x/text cases.Fold swaps their case instead. The file system is
 // the final truth for "exists".
-func TestRev3_CherokeeNewTitleNeverOverwritesAFile(t *testing.T) {
+func TestCherokeeNewTitleNeverOverwritesAFile(t *testing.T) {
 	st, repo := newStore(t)
 	old := "# ᏣᎳᎩ\n\nYears of hand-written text that must survive the merge.\n"
 	putFile(t, st, "wiki/proj/ᏣᎳᎩ.md", old)
@@ -30,7 +30,7 @@ func TestRev3_CherokeeNewTitleNeverOverwritesAFile(t *testing.T) {
 	}
 }
 
-func TestRev3_CherokeeTwoPagesOfOneSubmissionAreOneFile(t *testing.T) {
+func TestCherokeeTwoPagesOfOneSubmissionAreOneFile(t *testing.T) {
 	st, repo := newStore(t)
 	ns := learnN(t, st, proj, 2, tmplWorker)
 	rep, err := Submit(context.Background(), st, Submission{Project: proj, Pages: []Page{
@@ -61,7 +61,7 @@ func exclude(t *testing.T, repo, rule string) {
 
 // An ignored page cannot be added; before, git add staged the other paths and failed, and the next commit carried the
 // note deletion without the page.
-func TestRev3_IgnoredPageGoesToUnsorted(t *testing.T) {
+func TestIgnoredPageGoesToUnsorted(t *testing.T) {
 	st, repo := newStore(t)
 	exclude(t, repo, "*Secret*")
 	ns := learnN(t, st, proj, 1, tmplWorker)
@@ -86,7 +86,7 @@ func TestRev3_IgnoredPageGoesToUnsorted(t *testing.T) {
 	}
 }
 
-func TestRev3_IgnoredUnsortedFailsBeforeDeletingAnything(t *testing.T) {
+func TestIgnoredUnsortedFailsBeforeDeletingAnything(t *testing.T) {
 	st, repo := newStore(t)
 	exclude(t, repo, "Unsorted.md\n*Secret*")
 	ns := learnN(t, st, proj, 1, tmplWorker)
@@ -104,7 +104,7 @@ func TestRev3_IgnoredUnsortedFailsBeforeDeletingAnything(t *testing.T) {
 }
 
 // A failing commit (a hook that refuses) is named in the report, and nothing stays staged.
-func TestRev3_FailedCommitIsReportedAndLeavesNothingStaged(t *testing.T) {
+func TestFailedCommitIsReportedAndLeavesNothingStaged(t *testing.T) {
 	st, repo := newStore(t)
 	ns := learnN(t, st, proj, 1, tmplWorker)
 	commits(t, st, repo)

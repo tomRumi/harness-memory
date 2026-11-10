@@ -12,7 +12,7 @@ import (
 
 // The defence: git add that silently takes nothing is caught, reported, and nothing stays staged. A fake git that
 // skips `add` stands for any reason (a case-folded folder, an ignore rule that appeared after the guard).
-func TestRev4_CommitterCatchesAFileGitDidNotStage(t *testing.T) {
+func TestCommitterCatchesAFileGitDidNotStage(t *testing.T) {
 	st, _, repo := newStore(t)
 	bin := t.TempDir()
 	real, err := lookGit()

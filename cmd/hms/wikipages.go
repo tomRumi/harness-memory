@@ -156,7 +156,7 @@ func oneLineSummary(d *index.DB, id string) string {
 	return strings.Join(strings.Fields(s), " ")
 }
 
-// pairSpec is the owner-frozen pairs file. The copies of near_duplicates.sources are not in it: each is expected in
+// pairSpec is the frozen pairs file. The copies of near_duplicates.sources are not in it: each is expected in
 // the wiki as "<source without .md> (copy).md".
 type pairSpec struct {
 	Related        [][]string `json:"related"`

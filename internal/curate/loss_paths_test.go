@@ -1,6 +1,6 @@
 package curate
 
-// Reviewer tests: data-loss paths. A failing test is a defect; its message starts with DEFECT.
+// Data-loss paths. A failing test is a defect; its message starts with DEFECT.
 
 import (
 	"context"
@@ -43,7 +43,7 @@ func gitStatus(repo string) string {
 }
 
 // L01 crash/failure after a page write and before the note delete: Submit returns an error half way.
-func TestL01_FailureAfterPageWriteLeavesUncommittedPage(t *testing.T) {
+func TestFailureAfterPageWriteLeavesUncommittedPage(t *testing.T) {
 	st, repo := newStore(t)
 	ns := learnN(t, st, proj, 1, tmplWorker)
 	commits(t, st, repo)
@@ -69,7 +69,7 @@ func TestL01_FailureAfterPageWriteLeavesUncommittedPage(t *testing.T) {
 }
 
 // L02 two submits in one process: serialised; the second sees a stale page.
-func TestL02_TwoSubmitsSameProcess(t *testing.T) {
+func TestTwoSubmitsSameProcess(t *testing.T) {
 	st, _ := newStore(t)
 	old := "# Ports\n\nThe daemon uses a port.\n"
 	putFile(t, st, "wiki/proj/Ports.md", old)
@@ -93,7 +93,7 @@ func TestL02_TwoSubmitsSameProcess(t *testing.T) {
 }
 
 // L03 two submits from two processes (two Store values on one repository): the write lock is per process.
-func TestL03_TwoSubmitsTwoProcesses(t *testing.T) {
+func TestTwoSubmitsTwoProcesses(t *testing.T) {
 	lost := 0
 	for round := 0; round < 30 && lost == 0; round++ {
 		st, repo := newStore(t)
@@ -132,7 +132,7 @@ func TestL03_TwoSubmitsTwoProcesses(t *testing.T) {
 }
 
 // L04 page hand-edited between pending and submit: stale, notes stay.
-func TestL04_HandEditBetweenPendingAndSubmit(t *testing.T) {
+func TestHandEditBetweenPendingAndSubmit(t *testing.T) {
 	st, _ := newStore(t)
 	old := "# Ports\n\nThe daemon uses a port.\n"
 	putFile(t, st, "wiki/proj/Ports.md", old)
@@ -155,7 +155,7 @@ func TestL04_HandEditBetweenPendingAndSubmit(t *testing.T) {
 }
 
 // L05 a note assigned to two pages: nothing written.
-func TestL05_NoteOnTwoPages(t *testing.T) {
+func TestNoteOnTwoPages(t *testing.T) {
 	st, _ := newStore(t)
 	ns := learnN(t, st, proj, 1, tmplWorker)
 	_, err := Submit(context.Background(), st, Submission{Project: proj, Pages: []Page{
@@ -166,7 +166,7 @@ func TestL05_NoteOnTwoPages(t *testing.T) {
 }
 
 // L06 ids from another project are unknown; that project's note stays.
-func TestL06_IdsOfAnotherProject(t *testing.T) {
+func TestIdsOfAnotherProject(t *testing.T) {
 	st, _ := newStore(t)
 	other := learnN(t, st, "other", 1, tmplWorker)
 	rep, _ := Submit(context.Background(), st, Submission{Project: proj, Pages: []Page{{Title: "A", Body: bullets(other), Notes: ids(other)}}})
@@ -176,7 +176,7 @@ func TestL06_IdsOfAnotherProject(t *testing.T) {
 }
 
 // L07 title tricks: nothing may be written outside wiki/proj, and the notes must survive.
-func TestL07_TitleTricks(t *testing.T) {
+func TestTitleTricks(t *testing.T) {
 	for _, title := range []string{"..", "../x", "a/../../b", "sub/Page", `..\x`, ".hidden", "x\x00y", "Index", "unsorted", strings.Repeat("😀", 70), "Foo.md", "con"} {
 		st, repo := newStore(t)
 		ns := learnN(t, st, proj, 1, tmplWorker)
@@ -210,7 +210,7 @@ func TestL07_TitleTricks(t *testing.T) {
 }
 
 // L08 summary and tags with newline, ---, YAML syntax: new page and existing page must still parse.
-func TestL08_SummaryAndTagsYAML(t *testing.T) {
+func TestSummaryAndTagsYAML(t *testing.T) {
 	bad := []string{"a\nb", "---", "key: value", "- item", "[x, y]", "{a: 1}", "#comment", "'q'", "\"dq\"", "a\n---\nb: c", "yes", "null", "\\x", "\u2028sep", "\t tab", "&anchor", "*alias", "!tag", "|", ">"}
 	for i, s := range bad {
 		st, _ := newStore(t)
@@ -239,7 +239,7 @@ func TestL08_SummaryAndTagsYAML(t *testing.T) {
 }
 
 // L09 a body that starts with --- (frontmatter injection) on a new page and on an existing page without frontmatter.
-func TestL09_BodyStartsWithDashes(t *testing.T) {
+func TestBodyStartsWithDashes(t *testing.T) {
 	st, _ := newStore(t)
 	putFile(t, st, "wiki/proj/Plain.md", "# Plain\n\nOld text.\n")
 	ns := learnN(t, st, proj, 2, tmplWorker)
@@ -264,7 +264,7 @@ func TestL09_BodyStartsWithDashes(t *testing.T) {
 }
 
 // L10 a huge body: refused, notes to Unsorted, nothing lost.
-func TestL10_HugeBody(t *testing.T) {
+func TestHugeBody(t *testing.T) {
 	st, repo := newStore(t)
 	ns := learnN(t, st, proj, 1, tmplWorker)
 	body := bullets(ns) + strings.Repeat("filler words here and there\n", 400000)
@@ -275,7 +275,7 @@ func TestL10_HugeBody(t *testing.T) {
 }
 
 // L11 a note file whose id is not a uuid: pending hands it out, submit never takes it (stuck for ever).
-func TestL11_NonUUIDNoteID(t *testing.T) {
+func TestNonUUIDNoteID(t *testing.T) {
 	st, _ := newStore(t)
 	putFile(t, st, "notes/proj/my note.md", "---\nkind: learning\n---\n\nThe worker restarts after five failed health checks and pages the owner.\n")
 	bs, _ := Pending(context.Background(), st, proj, 0)
@@ -293,7 +293,7 @@ func TestL11_NonUUIDNoteID(t *testing.T) {
 }
 
 // L12 an existing page whose tags/sources are a YAML block list without indent (valid YAML, the form many tools write).
-func TestL12_BlockListFrontmatter(t *testing.T) {
+func TestBlockListFrontmatter(t *testing.T) {
 	for _, old := range []string{
 		"---\ntitle: Ports\ntags:\n- net\n- ops\nsources:\n- 2026-10-01: abc\n---\n\n# Ports\n\nThe daemon uses a port.\n",
 		"---\ntitle: Ports\ntags:\n  - net\nsources:\n  - \"2026-10-01: abc\"\n---\n\n# Ports\n\nThe daemon uses a port.\n",
@@ -314,7 +314,7 @@ func TestL12_BlockListFrontmatter(t *testing.T) {
 }
 
 // L13 a note deleted by rating retirement during a submit: its text is in no page and not in Unsorted.
-func TestL13_RatingRetirementDeletesUnplacedNote(t *testing.T) {
+func TestRatingRetirementDeletesUnplacedNote(t *testing.T) {
 	st, repo := newStore(t)
 	ns := learnN(t, st, proj, 2, tmplWorker)
 	for i := 0; i < store.RetireAfter; i++ {
@@ -327,7 +327,7 @@ func TestL13_RatingRetirementDeletesUnplacedNote(t *testing.T) {
 }
 
 // L14 a hand-written Index.md is overwritten by the generated index.
-func TestL14_HandWrittenIndexOverwritten(t *testing.T) {
+func TestHandWrittenIndexOverwritten(t *testing.T) {
 	st, _ := newStore(t)
 	putFile(t, st, "wiki/proj/Index.md", "# My own index\n\nHand-written overview of the whole project, years of notes.\n")
 	ns := learnN(t, st, proj, 1, tmplWorker)
@@ -338,9 +338,9 @@ func TestL14_HandWrittenIndexOverwritten(t *testing.T) {
 }
 
 // L15 a note made of punctuation only: CheckPage finds it everywhere, the note is deleted with no text placed.
-func TestL15_PunctuationOnlyNote(t *testing.T) {
+func TestPunctuationOnlyNote(t *testing.T) {
 	st, repo := newStore(t)
-	// learn refuses it (reviewer's expectation: it was stored); a note file that came by other ways is the case here
+	// learn refuses it (an earlier expectation was that it was stored); a note file that came by other ways is the case here
 	if _, err := st.Learn(context.Background(), "=> !!! ??? -> ...", proj, "", ""); err == nil || !strings.Contains(err.Error(), "nothing to remember") {
 		t.Errorf("learn must refuse a note with no letter or digit: %v", err)
 	}
@@ -357,7 +357,7 @@ func TestL15_PunctuationOnlyNote(t *testing.T) {
 }
 
 // L16 Unicode normalisation: an NFC title over an NFD file name (macOS file systems treat them as one file).
-func TestL16_NFCTitleOverwritesNFDPage(t *testing.T) {
+func TestNFCTitleOverwritesNFDPage(t *testing.T) {
 	st, repo := newStore(t)
 	nfd := "Cafe\u0301"
 	nfc := "Caf\u00e9"
@@ -381,7 +381,7 @@ func TestL16_NFCTitleOverwritesNFDPage(t *testing.T) {
 }
 
 // L17 two new pages in one submission whose titles differ only in normalisation: one file, one overwrites the other.
-func TestL17_TwoTitlesSameFileInOneSubmission(t *testing.T) {
+func TestTwoTitlesSameFileInOneSubmission(t *testing.T) {
 	st, repo := newStore(t)
 	ns := learnN(t, st, proj, 2, tmplWorker)
 	Submit(context.Background(), st, Submission{Project: proj, Pages: []Page{
@@ -396,7 +396,7 @@ func TestL17_TwoTitlesSameFileInOneSubmission(t *testing.T) {
 }
 
 // L18 project name with capitals through Submit (the CLI takes -p as given).
-func TestL18_ProjectCase(t *testing.T) {
+func TestProjectCase(t *testing.T) {
 	st, repo := newStore(t)
 	ns := learnN(t, st, proj, 1, tmplWorker)
 	commits(t, st, repo)
@@ -413,7 +413,7 @@ func TestL18_ProjectCase(t *testing.T) {
 }
 
 // L19 a commit failure after the files changed: the files stay on disk and the commit happens once git works.
-func TestL19_CommitFailureThenRecovery(t *testing.T) {
+func TestCommitFailureThenRecovery(t *testing.T) {
 	st, repo := newStore(t)
 	ns := learnN(t, st, proj, 1, tmplWorker)
 	commits(t, st, repo)
@@ -436,7 +436,7 @@ func TestL19_CommitFailureThenRecovery(t *testing.T) {
 
 // L20 a page that passes the check but whose frontmatter cannot be edited: the composePage error path. A page linking
 // to it was already accepted; the link is now broken.
-func TestL20_ComposeFailureLeavesBrokenLink(t *testing.T) {
+func TestComposeFailureLeavesBrokenLink(t *testing.T) {
 	st, _ := newStore(t)
 	old := "---\ntitle: Ports\n---\n\n# Ports\n\nThe daemon uses a port.\n"
 	putFile(t, st, "wiki/proj/Ports.md", old)

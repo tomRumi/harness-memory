@@ -17,9 +17,9 @@ import (
 )
 
 // R01: a lock holder killed with SIGKILL releases the lock (flock dies with the process).
-func TestR01_CrashedLockHolder(t *testing.T) {
-	if os.Getenv("REV2_HOLD") != "" {
-		unlock, err := lockFile(os.Getenv("REV2_HOLD"))
+func TestCrashedLockHolder(t *testing.T) {
+	if os.Getenv("HMS_TEST_HOLD_LOCK") != "" {
+		unlock, err := lockFile(os.Getenv("HMS_TEST_HOLD_LOCK"))
 		if err != nil {
 			os.Exit(3)
 		}
@@ -30,8 +30,8 @@ func TestR01_CrashedLockHolder(t *testing.T) {
 	}
 	st, _, repo := newStore(t)
 	lock := filepath.Join(filepath.Dir(repo), "write.lock")
-	cmd := exec.Command(os.Args[0], "-test.run", "TestR01_CrashedLockHolder")
-	cmd.Env = append(os.Environ(), "REV2_HOLD="+lock)
+	cmd := exec.Command(os.Args[0], "-test.run", "^TestCrashedLockHolder$")
+	cmd.Env = append(os.Environ(), "HMS_TEST_HOLD_LOCK="+lock)
 	out, _ := cmd.StdoutPipe()
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
@@ -62,7 +62,7 @@ func TestR01_CrashedLockHolder(t *testing.T) {
 }
 
 // R02: a lock file that cannot be opened. Report what a save does.
-func TestR02_LockFileUnopenable(t *testing.T) {
+func TestLockFileUnopenable(t *testing.T) {
 	st, _, repo := newStore(t)
 	lock := filepath.Join(filepath.Dir(repo), "write.lock")
 	os.WriteFile(lock, nil, 0o444)
@@ -90,7 +90,7 @@ func TestR02_LockFileUnopenable(t *testing.T) {
 }
 
 // R03: two stores in one process (two processes in real life) with mixed writes and Do: no deadlock.
-func TestR03_NoDeadlockTwoStores(t *testing.T) {
+func TestNoDeadlockTwoStores(t *testing.T) {
 	st, _, repo := newStore(t)
 	home := filepath.Dir(repo)
 	st2, err := New(repo, st.DB, &bag{}, NewCommitter(repo, 20*time.Millisecond), filepath.Join(home, "events2.db"))
@@ -129,7 +129,7 @@ func TestR03_NoDeadlockTwoStores(t *testing.T) {
 }
 
 // R04: the write lock is not held while git runs (a slow pre-commit hook).
-func TestR04_LockNotHeldDuringSlowGit(t *testing.T) {
+func TestLockNotHeldDuringSlowGit(t *testing.T) {
 	st, _, repo := newStore(t)
 	hook := filepath.Join(repo, ".git", "hooks", "pre-commit")
 	os.WriteFile(hook, []byte("#!/bin/sh\nsleep 3\n"), 0o755)
@@ -146,7 +146,7 @@ func TestR04_LockNotHeldDuringSlowGit(t *testing.T) {
 }
 
 // R05: Do writes a file twice and deletes a note, then fails: the first version comes back, once.
-func TestR05_RollbackTwoWritesSameFile(t *testing.T) {
+func TestRollbackTwoWritesSameFile(t *testing.T) {
 	st, _, repo := newStore(t)
 	p := filepath.Join(repo, "wiki", "p", "A.md")
 	os.MkdirAll(filepath.Dir(p), 0o755)
@@ -187,7 +187,7 @@ func TestR05_RollbackTwoWritesSameFile(t *testing.T) {
 }
 
 // R06: a file that existed but was unreadable when first touched is deleted by the rollback.
-func TestR06_RollbackUnreadableFile(t *testing.T) {
+func TestRollbackUnreadableFile(t *testing.T) {
 	st, _, repo := newStore(t)
 	p := filepath.Join(repo, "wiki", "p", "Secret.md")
 	os.MkdirAll(filepath.Dir(p), 0o755)
@@ -204,7 +204,7 @@ func TestR06_RollbackUnreadableFile(t *testing.T) {
 }
 
 // R07: a file changed by someone else between the tx write and the failure is overwritten by the rollback.
-func TestR07_RollbackOverwritesForeignEdit(t *testing.T) {
+func TestRollbackOverwritesForeignEdit(t *testing.T) {
 	st, _, repo := newStore(t)
 	p := filepath.Join(repo, "wiki", "p", "A.md")
 	os.MkdirAll(filepath.Dir(p), 0o755)
@@ -219,7 +219,7 @@ func TestR07_RollbackOverwritesForeignEdit(t *testing.T) {
 }
 
 // R08: Sweep after a crash must cover a wiki page with an accented name.
-func TestR08_SweepAccentedWikiPage(t *testing.T) {
+func TestSweepAccentedWikiPage(t *testing.T) {
 	st, _, repo := newStore(t)
 	os.MkdirAll(filepath.Join(repo, "wiki", "p"), 0o755)
 	os.WriteFile(filepath.Join(repo, "wiki", "p", "Café.md"), []byte("# Café\n\ntext\n"), 0o644)
@@ -233,7 +233,7 @@ func TestR08_SweepAccentedWikiPage(t *testing.T) {
 }
 
 // R09: detached HEAD: no commit; back on a branch the files are committed with all messages, once.
-func TestR09_DetachedThenBranch(t *testing.T) {
+func TestDetachedThenBranch(t *testing.T) {
 	st, _, repo := newStore(t)
 	st.Learn(context.Background(), "Note one before detaching the head.", "p", "", "")
 	st.Commit.Flush()
@@ -265,7 +265,7 @@ func TestR09_DetachedThenBranch(t *testing.T) {
 }
 
 // R10: Close while writes are still arriving: no worker runs after Close returned.
-func TestR10_CloseWithConcurrentWrites(t *testing.T) {
+func TestCloseWithConcurrentWrites(t *testing.T) {
 	st, b, _ := newStore(t)
 	_ = b
 	var wg sync.WaitGroup
@@ -309,7 +309,7 @@ func (s *slowBag) Docs(ctx context.Context, t []string) ([][]float32, error) {
 	return s.bag.Docs(ctx, t)
 }
 
-func TestR11_WaitEmbedUnderAStreamOfWrites(t *testing.T) {
+func TestWaitEmbedUnderAStreamOfWrites(t *testing.T) {
 	st, _, _ := newStore(t)
 	st.Emb = &slowBag{}
 	stop := make(chan struct{})

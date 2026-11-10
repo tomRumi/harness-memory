@@ -33,7 +33,7 @@ func looseFiles(t *testing.T, repo string) string {
 }
 
 // e12 of the review: learn, AddFact, Retire and the index page refuse, and nothing is created, changed or committed.
-func TestRev4_CapitalFolderRefusesEveryWrite(t *testing.T) {
+func TestCapitalFolderRefusesEveryWrite(t *testing.T) {
 	ctx := context.Background()
 	st, _, repo := newStore(t)
 	id, err := st.Learn(ctx, "A note in the lower-case folder that is kept.", "other", "", "")
@@ -69,7 +69,7 @@ func TestRev4_CapitalFolderRefusesEveryWrite(t *testing.T) {
 }
 
 // Retire of a note that lies in a capital-letter folder is refused too (its delete would not be staged either).
-func TestRev4_RetireInCapitalFolderRefused(t *testing.T) {
+func TestRetireInCapitalFolderRefused(t *testing.T) {
 	ctx := context.Background()
 	st, _, repo := newStore(t)
 	capFolder(t, repo, "notes")

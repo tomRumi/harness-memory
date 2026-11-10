@@ -176,7 +176,7 @@ func TestDocumentsSayWhatTheProgramDoes(t *testing.T) {
 	if s := read("integrations/hermes/README.md"); strings.Contains(s, "(step 0a)") {
 		t.Error("hermes README: step 0a")
 	}
-	if s := read("README.md"); !strings.Contains(s, "more than 160 automated tests") || !strings.Contains(s, "its notes go to Unsorted") {
+	if s := read("README.md"); !strings.Contains(s, "automated tests") || !strings.Contains(s, "goes to Unsorted") {
 		t.Error("README: test count or the Unsorted sentence")
 	}
 	if s := read("docs/reference.md"); !strings.Contains(s, "golang.org/x/text") || strings.Contains(s, "retired by the merge") {
@@ -239,7 +239,7 @@ func TestRecipeAndDocumentsAfterTheSecondReview(t *testing.T) {
 	}
 	readme, ref, hermes := read("README.md"), read("docs/reference.md"), read("integrations/hermes/README.md")
 	for name, text := range map[string]string{"README": readme, "reference": ref, "design": design, "recipe": recipe} {
-		for _, bad := range []string{"checks that nothing was lost", "every note's words and numbers arrived", "so nothing is lost", "the index and the settings", "One committer makes the commits", "Python"} {
+		for _, bad := range []string{"checks that nothing was lost", "every note's words and numbers arrived", "so nothing is lost", "the index and the settings", "One committer makes the commits", "predecessor", "hermes-memory-rag"} {
 			if strings.Contains(text, bad) {
 				t.Errorf("%s still says %q", name, bad)
 			}

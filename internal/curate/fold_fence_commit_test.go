@@ -29,7 +29,7 @@ func allWiki(t *testing.T, repo string) string {
 }
 
 // N01: titles that the macOS file system treats as one name but wiki.Fold (NFC + ToLower) does not.
-func TestN01_CaseFoldCollisionOverwritesPage(t *testing.T) {
+func TestCaseFoldCollisionOverwritesPage(t *testing.T) {
 	for _, c := range []struct{ old, new string }{
 		{"Strasse", "Straße"},
 		{"ΟΔΟΣ", "οδος"},
@@ -48,7 +48,7 @@ func TestN01_CaseFoldCollisionOverwritesPage(t *testing.T) {
 }
 
 // N02: the same within one submission.
-func TestN02_CaseFoldCollisionInOneSubmission(t *testing.T) {
+func TestCaseFoldCollisionInOneSubmission(t *testing.T) {
 	st, repo := newStore(t)
 	ns := learnN(t, st, proj, 2, tmplWorker)
 	Submit(context.Background(), st, Submission{Project: proj, Pages: []Page{
@@ -63,7 +63,7 @@ func TestN02_CaseFoldCollisionInOneSubmission(t *testing.T) {
 }
 
 // N03: links and aliases across normalisation resolve.
-func TestN03_LinksAndAliasesNFC(t *testing.T) {
+func TestLinksAndAliasesNFC(t *testing.T) {
 	st, _ := newStore(t)
 	putFile(t, st, "wiki/proj/Caf\u00e9.md", "---\naliases: [Kave\u0301]\n---\n# Café\n\ntext about the cafe.\n")
 	ns := learnN(t, st, proj, 1, tmplWorker)
@@ -77,7 +77,7 @@ func TestN03_LinksAndAliasesNFC(t *testing.T) {
 
 // N04: a merge that opens ``` and "closes" with ~~~ (or opens ```` and closes ```) adds 2 fence lines, so the rule
 // passes, the block stays open to the end of the page, and a new broken link after it is not seen.
-func TestN04_FenceLeftOpenByMismatchedMarkers(t *testing.T) {
+func TestFenceLeftOpenByMismatchedMarkers(t *testing.T) {
 	old := "# P\n\nOld text of the page.\n"
 	notes := []Note{{ID: "n1", Text: "The relay listens on port 9123 for the agents."}}
 	for name, body := range map[string]string{
@@ -96,7 +96,7 @@ func TestN04_FenceLeftOpenByMismatchedMarkers(t *testing.T) {
 }
 
 // N06: SetKeys on block lists with a blank line or a comment between the items.
-func TestN06_SetKeysBlockListVariants(t *testing.T) {
+func TestSetKeysBlockListVariants(t *testing.T) {
 	for name, src := range map[string]string{
 		"blank line inside": "---\ntitle: P\ntags:\n- a\n\n- b\nsummary: s\n---\nbody\n",
 		"comment inside":    "---\ntitle: P\ntags:\n- a\n# c\n- b\nsummary: s\n---\nbody\n",
@@ -118,7 +118,7 @@ func TestN06_SetKeysBlockListVariants(t *testing.T) {
 }
 
 // N08: an Index.md the owner cannot read is taken as absent and overwritten.
-func TestN08_UnreadableHandWrittenIndex(t *testing.T) {
+func TestUnreadableHandWrittenIndex(t *testing.T) {
 	st, repo := newStore(t)
 	p := filepath.Join(repo, "wiki", proj, "Index.md")
 	os.MkdirAll(filepath.Dir(p), 0o755)

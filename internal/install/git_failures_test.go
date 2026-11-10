@@ -12,7 +12,7 @@ import (
 
 // A first commit that fails (a hook that refuses) is reported by init, and the .gitignore is not left staged: a staged
 // .gitignore would make the committer refuse every later memory commit.
-func TestRev3_InitFailedFirstCommitLeavesNothingStaged(t *testing.T) {
+func TestInitFailedFirstCommitLeavesNothingStaged(t *testing.T) {
 	f := newFake(t, true)
 	env(t, f.URL)
 	tpl := t.TempDir()
@@ -33,7 +33,7 @@ func TestRev3_InitFailedFirstCommitLeavesNothingStaged(t *testing.T) {
 	}
 }
 
-func TestRev3_DoctorWarnsOnAnIndexLock(t *testing.T) {
+func TestDoctorWarnsOnAnIndexLock(t *testing.T) {
 	repo := t.TempDir()
 	if out, err := exec.Command("git", "-C", repo, "init", "-q", "-b", "main").CombinedOutput(); err != nil {
 		t.Fatalf("%v %s", err, out)

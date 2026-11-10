@@ -6,7 +6,7 @@ import (
 )
 
 // Fences as CommonMark has them: one function for the check, the link finder, the chunker and the summary.
-func TestRev3_FenceFollowsCommonMark(t *testing.T) {
+func TestFenceFollowsCommonMark(t *testing.T) {
 	cases := []struct{ name, text, want string }{
 		{"``` in ````", "````\n```\n[[A]]\n```\n````\n[[B]]\n", "B"},
 		{"~~~ in ```", "```\n~~~\n[[A]]\n~~~\n```\n[[B]]\n", "B"},
@@ -29,7 +29,7 @@ func TestRev3_FenceFollowsCommonMark(t *testing.T) {
 	}
 }
 
-func TestRev3_FenceOpenAtTheEnd(t *testing.T) {
+func TestFenceOpenAtTheEnd(t *testing.T) {
 	for text, want := range map[string]bool{
 		"```\ncode\n":          true,
 		"```\ncode\n```\n":     false,

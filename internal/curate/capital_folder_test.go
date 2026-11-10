@@ -11,7 +11,7 @@ import (
 // Fourth review, repro e12: notes exist, then a folder wiki/MyProj appears (Obsidian), then the merge runs. It used to
 // say "merged" with exit 0 while the page was in no commit (git, case-insensitive, did not stage the lower-case path).
 // Now the whole merge is refused before anything changes; the notes stay where they are, the repository stays clean.
-func TestRev4_E12_MergeIntoCapitalFolderIsRefusedAndChangesNothing(t *testing.T) {
+func TestE12_MergeIntoCapitalFolderIsRefusedAndChangesNothing(t *testing.T) {
 	st, repo := newStore(t)
 	ns := learnN(t, st, "myproj", 2, tmplWorker)
 	commits(t, st, repo)
