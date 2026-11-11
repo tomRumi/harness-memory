@@ -51,7 +51,7 @@ func (s *Store) LearnAs(ctx context.Context, text, proj, kind, supersedes string
 	if !hasLetterOrDigit(text) {
 		return "", fmt.Errorf("nothing to remember: the text has no letter or digit")
 	}
-	if err := refuseSecret(text); err != nil {
+	if err := s.checkSecret(proj, text, kind); err != nil {
 		return "", err
 	}
 	id := DetID("mem", text) // from the full text: two notes that differ only after the cut are two notes
@@ -166,7 +166,7 @@ func (s *Store) AddFact(ctx context.Context, text, proj, category string, trust 
 	if text == "" {
 		return "", fmt.Errorf("refusing to store an empty fact")
 	}
-	if err := refuseSecret(text); err != nil {
+	if err := s.checkSecret(proj, text, category); err != nil {
 		return "", err
 	}
 	if category == "" {
