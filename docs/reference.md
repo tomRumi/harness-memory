@@ -19,6 +19,7 @@ Commands, file formats, the merge check and settings. For what the service is an
   something else, and it retries after a failure.
 - `feedback` records helpful or unhelpful ratings per session; a note that five different sessions rated unhelpful
   (and none helpful) is listed as a candidate: `hms curate` prints `rated unhelpful by 5 sessions, none helpful: <ids>`. Only `retire` deletes.
+- `learn` and `fact_add` refuse text that looks like a secret: a credential assignment (`API_KEY=` or `password:` followed by 16 or more value characters), a private key block, a `Bearer` token, or a token with a well-known prefix (`sk-`, `ghp_`, `xoxb-`, `AKIA`). The answer names the rule, never the text; nothing is written and nothing is committed. Put the secret in a vault and store only its name. This is a shape check, not a guarantee: a secret in another shape is stored.
 - No secret is indexed: hidden files and directories are skipped, and a file holding a private key block is never
   indexed (it is reported by name). The source clone has a commit hook (`scripts/hooks/pre-commit`, enabled with
   `git config core.hooksPath scripts/hooks`) that refuses a commit carrying a home path, a credential shape, a private
