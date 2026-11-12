@@ -40,6 +40,15 @@ var secretSamples = map[string]string{
 	"credential assignment #wpclibare": "wp config set AUTH_KEY " + "k;Q2|8xvN!b%Zr1^Lq&3Tz]Yd+0Hf~Gw4Cm>Js7Pe<Ua",
 	"credential assignment #wpclisalt": "wp config set --type=constant LOGGED_IN_SALT '" + "k;Q2|8xvN!b%Zr1^Lq&3Tz]Yd+0Hf~Gw4Cm>Js7Pe<Ua'",
 	"credential assignment #yamlsalt":  "AUTH_KEY: \"" + "k;Q2|8xvN!b%Zr1^Lq&3Tz]Yd+0Hf~Gw4Cm>Js7Pe<Ua\"",
+
+	"credential assignment #dollar":      "define('AUTH_KEY', '" + "$Q2|8xvN!b%Zr1^Lq&3Tz]Yd+0Hf~Gw4Cm>Js7Pe<Ua" + "');",
+	"credential assignment #angle":       "define('NONCE_SALT', '" + "<Q2|8xvN!b%Zr1^Lq&3Tz]Yd+0Hf~Gw4Cm>Js7Pe<Ua" + "');",
+	"credential assignment #dollarpw":    "define('DB_PASS" + "WORD', '$" + "p@ssW0rd!Xk29fjq0Lmz');",
+	"credential assignment #percentsalt": "define('LOGGED_IN_SALT', '%" + "Q2|8xvN!b%Zr1^Lq&3Tz]Yd+0Hf~Gw4Cm>Js7Pe<Ua" + "');",
+	"credential assignment #parensalt":   "define('SECURE_AUTH_KEY', '(" + "Q2|8xvN!b%Zr1^Lq&3Tz]Yd+0Hf~Gw4Cm>Js7Pe<Ua" + "');",
+	"credential assignment #dbpass":      "wp config create --dbname=site --db" + "pass='p@ssW0rd!Xk29fjq0Lmz' --dbuser=app",
+	"credential assignment #dbpassbare":  "wp config create --db" + "pass=Xk29fjq0Lmz81PqR",
+	"credential assignment #wppath":      "wp --path=/var/www/site config set DB_PASS" + "WORD 'p@ssW0rd!Xk29fjq0Lmz'",
 }
 
 // The eight WordPress key and salt lines: random by nature, so any long value counts, with symbols or without a digit.
@@ -86,6 +95,12 @@ var secretControls = []string{
 	"wp config set DB_PASS" + "WORD $DB_PASS" + "WORD_FILE_1",
 	"wp config set WP_DEBUG true --raw",
 	"wp config set DB_NAME wordpress_site_2026",
+	"wp config set BYPASS_CACHE_ON_COOKIE wordpress_logged_in_2026",
+	"wp config create --dbname=site --db" + "pass=$DB_PASS" + "WORD_1",
+	"wp config create --dbname=site --dbuser=app --dbhost=127.0.0.1",
+	"wp --path=/var/www/site config set WP_DEBUG true --raw",
+	"define('WPMS_SMTP_PASS', '${SMTP_PASS_1}');",
+	"define('AUTH_KEY', '<put your unique phrase here>');",
 }
 
 func TestSecretShapesRefusedOnLearnAndFactAdd(t *testing.T) {
@@ -104,7 +119,7 @@ func TestSecretShapesRefusedOnLearnAndFactAdd(t *testing.T) {
 				if !strings.Contains(err.Error(), strings.SplitN(rule, " #", 2)[0]) || !strings.Contains(err.Error(), "vault") {
 					t.Fatalf("%s error should name the rule %q and say what to do: %v", name, rule, err)
 				}
-				for _, frag := range []string{"abcd1234", "abcdefghij", "MIIEow", "1234567890", "ABCDEFGHIJ", "s3cretPass1", "wJalr", "Ab3dEf", "Zr1^Lq", "qWmzLt", "Xk29fj", "p@ssW0"} {
+				for _, frag := range []string{"abcd1234", "abcdefghij", "MIIEow", "1234567890", "ABCDEFGHIJ", "s3cretPass1", "wJalr", "Ab3dEf", "Zr1^Lq", "qWmzLt", "Xk29fj", "p@ssW0", "Q2|8xv"} {
 					if strings.Contains(err.Error(), frag) {
 						t.Fatalf("%s error repeats the text: %v", name, err)
 					}

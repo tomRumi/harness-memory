@@ -18,8 +18,8 @@ var (
 	nameTail  = `(?:_[A-Za-z0-9_]*)?`
 	// Between a name and a value that opens with a quote (define('X', 'v'), "x": "v", 'x' => 'v').
 	quotedSep = `(?:["']\s*,\s*|["']?\s*(?:=>|[:=])\s*)`
-	// wp config set [--flags] NAME followed by the value.
-	wpSet = `(?i)\bwp\s+config\s+set\s+(?:--\S+\s+)*[A-Za-z0-9_]*`
+	// wp [--flags] config set [--flags] NAME followed by the value.
+	wpSet = `(?i)\bwp\s+(?:--\S+\s+)*config\s+set\s+(?:--\S+\s+)*[A-Za-z0-9_]*`
 )
 
 // secretRules are the shapes a note or fact may not hold. The names are what the error says; the text never is.
@@ -43,6 +43,8 @@ var secretRules = []struct {
 	{"url credentials", regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[^\s/:@]+:([^\s/@:${}<>]{6,})@`), hasDigit},
 }
 
+var placeholderValue = regexp.MustCompile(`^(?:\$\{?\w+\}?|<.*>|%\w+%)$`)
+
 func init() {
 	// Quoted values are taken up to the closing quote, so symbols in the value do not hide it. Needs a digit and no space
 	// (or, for a key or salt name, 32 or more characters of any kind: those are random by nature, and the stock
@@ -51,7 +53,7 @@ func init() {
 		names string
 		judge func(string) bool
 	}{{credNames, looksLikeQuotedSecret}, {saltNames, looksLikeSaltValue}} {
-		wpNames := strings.NewReplacer("(?:^|[^A-Za-z0-9])", "", "_PASS", "PASS", "_SALT", "SALT").Replace(c.names)
+		wpNames := strings.NewReplacer("(?:^|[^A-Za-z0-9])", "").Replace(c.names)
 		for _, form := range []string{
 			`(?i)` + c.names + nameTail + quotedSep + `'([^']*)'`,
 			`(?i)` + c.names + nameTail + quotedSep + `"([^"]*)"`,
@@ -66,12 +68,21 @@ func init() {
 			}{"credential assignment", regexp.MustCompile(form), c.judge})
 		}
 	}
+	// wp config create --dbpass=VALUE
+	for _, form := range []string{`(?i)--dbpass=\s*'([^']*)'`, `(?i)--dbpass=\s*"([^"]*)"`, `(?i)--dbpass=([^\s'"]+)`} {
+		secretRules = append(secretRules, struct {
+			name  string
+			re    *regexp.Regexp
+			judge func(string) bool
+		}{"credential assignment", regexp.MustCompile(form), looksLikeQuotedSecret})
+	}
 }
 
 // looksLikeQuotedSecret judges a value read up to its closing quote: 12 or more characters, no space, a digit, and the
-// mixed-case rule for paths. A variable or placeholder (starts with $, <, % or ( ) is not a value.
+// mixed-case rule for paths. A variable or placeholder as a whole ($NAME, ${NAME}, <...>, %NAME%) is not a value; one that only starts with such a
+// character is, since random keys use all of them.
 func looksLikeQuotedSecret(v string) bool {
-	if len(v) < 12 || strings.ContainsAny(v, " \t") || strings.ContainsAny(v[:1], "$<%(") || strings.Contains(v, "getenv") {
+	if len(v) < 12 || strings.ContainsAny(v, " \t") || placeholderValue.MatchString(v) || strings.Contains(v, "getenv") {
 		return false
 	}
 	return looksLikeSecretValue(v)
@@ -80,7 +91,7 @@ func looksLikeQuotedSecret(v string) bool {
 // looksLikeSaltValue is true for a key or salt value of 32 or more characters, or for a shorter one that passes the
 // password judge. A real salt is 64 random characters; a placeholder phrase is shorter.
 func looksLikeSaltValue(v string) bool {
-	return (len(v) >= 32 && !strings.ContainsAny(v[:1], "$<%(")) || looksLikeQuotedSecret(v)
+	return (len(v) >= 32 && !placeholderValue.MatchString(v)) || looksLikeQuotedSecret(v)
 }
 
 func hasDigit(s string) bool { return strings.ContainsAny(s, "0123456789") }
