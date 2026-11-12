@@ -320,7 +320,7 @@ No other language was evaluated. The libraries are few: `modernc.org/sqlite`, th
 
 ## 8. Limits and known risks
 
-- Secrets are refused on write by shape only (credential assignments including the quoted `define('X_PASSWORD', '...')` and JSON forms, private key blocks, bearer and web tokens, URLs with a
+- Secrets are refused on write by shape only (credential assignments including the quoted `define('X_PASSWORD', '...')`, JSON and `wp config set` forms and the WordPress key and salt lines, private key blocks, bearer and web tokens, URLs with a
   password, common token prefixes). A secret in another shape, or split over lines, is stored and stays in git history; keep secrets in a vault.
 - Loopback only. Without `HMS_TOKENS_DIR` there is no authentication: anything on the machine can read and write. With it,
   tokens limit each caller to its projects, but they are plain bearer tokens over HTTP on loopback, not a defence against

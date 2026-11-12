@@ -29,6 +29,25 @@ var secretSamples = map[string]string{
 	"token prefix #gh":              "pushed with gh" + "p_abcdefghij0123456789abcdefghij0123",
 	"token prefix #xox":             "bot is xox" + "b-1234567890-abcdefghij",
 	"token prefix #aws":             "id AK" + "IAABCDEFGHIJKLMNOP",
+
+	"credential assignment #symbolpw":  "define('DB_PASS" + "WORD', 'p@ssW0rd!Xk29fjq0Lmz');",
+	"credential assignment #pw12":      "define('DB_PASS" + "WORD', 'p@ssW0rd!x9z');",
+	"credential assignment #smtp":      "define('WPMS_SMTP_PASS', 'Xk29fjq0Lmz81PqR');",
+	"credential assignment #smtpenv":   "WPMS_SMTP_PASS=Xk29fjq0Lmz81PqR",
+	"credential assignment #cache":     "define('WP_CACHE_KEY_SALT', 'q8" + "Wm!zL;t2^Rb#Vn5&Hc@Xd3$Ke9');",
+	"credential assignment #plainsalt": "define('NONCE_SALT', '" + "qWmzLtRbVnHcXdKeJfGyPsUaTiOo" + "ZxCvBnMlKjHg');",
+	"credential assignment #wpcli":     "run wp config set DB_PASS" + "WORD 'p@ssW0rd!Xk29fjq0Lmz' --type=constant",
+	"credential assignment #wpclibare": "wp config set AUTH_KEY " + "k;Q2|8xvN!b%Zr1^Lq&3Tz]Yd+0Hf~Gw4Cm>Js7Pe<Ua",
+	"credential assignment #wpclisalt": "wp config set --type=constant LOGGED_IN_SALT '" + "k;Q2|8xvN!b%Zr1^Lq&3Tz]Yd+0Hf~Gw4Cm>Js7Pe<Ua'",
+	"credential assignment #yamlsalt":  "AUTH_KEY: \"" + "k;Q2|8xvN!b%Zr1^Lq&3Tz]Yd+0Hf~Gw4Cm>Js7Pe<Ua\"",
+}
+
+// The eight WordPress key and salt lines: random by nature, so any long value counts, with symbols or without a digit.
+func init() {
+	for _, n := range []string{"AUTH_KEY", "SECURE_AUTH_KEY", "LOGGED_IN_KEY", "NONCE_KEY", "AUTH_SALT", "SECURE_AUTH_SALT", "LOGGED_IN_SALT", "NONCE_SALT"} {
+		secretSamples["credential assignment #salt-"+n] = "define('" + n + "',  '" + "k;Q2|8xvN!b%Zr1^Lq&3Tz]Yd+0Hf~Gw4Cm>Js7Pe<Ua" + "');"
+		secretSamples["credential assignment #saltplain-"+n] = "define( \"" + n + "\", \"" + "qWmzLtRbVnHcXdKeJfGyPsUaTiOoZxCvBnMlKjHgFdSaPoIuYtRe" + "\" );"
+	}
 }
 
 var secretControls = []string{
@@ -55,6 +74,18 @@ var secretControls = []string{
 	"define('DB_PASS" + "WORD', 'wordpress');",
 	"{\"pass" + "word\": \"projects/site/wp-admin-login\"}",
 	"postgres://user:${DB_PASSWORD}@db.example.invalid/main",
+	"define('AUTH_KEY',         'put your unique phrase here');",
+	"define('SECURE_AUTH_SALT', 'put your unique phrase here');",
+	"define('DB_PASS" + "WORD', getenv('DB_PASS" + "WORD_FILE_1'));",
+	"define('WP_CACHE_KEY_SALT', getenv('CACHE_SALT_1'));",
+	"define('WP_CACHE_KEY_SALT', 'site-cache');",
+	"define('WPMS_SMTP_PASS', 'wordpress');",
+	"define('DB_PASS" + "WORD', 'see the vault entry 2');",
+	"The salts AUTH_KEY and NONCE_SALT are generated once per site and kept in the vault.",
+	"wp config set DB_PASS" + "WORD <value>",
+	"wp config set DB_PASS" + "WORD $DB_PASS" + "WORD_FILE_1",
+	"wp config set WP_DEBUG true --raw",
+	"wp config set DB_NAME wordpress_site_2026",
 }
 
 func TestSecretShapesRefusedOnLearnAndFactAdd(t *testing.T) {
@@ -73,7 +104,7 @@ func TestSecretShapesRefusedOnLearnAndFactAdd(t *testing.T) {
 				if !strings.Contains(err.Error(), strings.SplitN(rule, " #", 2)[0]) || !strings.Contains(err.Error(), "vault") {
 					t.Fatalf("%s error should name the rule %q and say what to do: %v", name, rule, err)
 				}
-				for _, frag := range []string{"abcd1234", "abcdefghij", "MIIEow", "1234567890", "ABCDEFGHIJ", "s3cretPass1", "wJalr", "Ab3dEf"} {
+				for _, frag := range []string{"abcd1234", "abcdefghij", "MIIEow", "1234567890", "ABCDEFGHIJ", "s3cretPass1", "wJalr", "Ab3dEf", "Zr1^Lq", "qWmzLt", "Xk29fj", "p@ssW0"} {
 					if strings.Contains(err.Error(), frag) {
 						t.Fatalf("%s error repeats the text: %v", name, err)
 					}
