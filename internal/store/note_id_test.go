@@ -20,7 +20,7 @@ func TestStagedRetireReadsStatusFromFile(t *testing.T) {
 	raw, _ := os.ReadFile(rel)
 	data, _ := md.DeleteKey(raw, "status")
 	os.WriteFile(rel, data, 0o644)
-	if _, err := st.RetireAs(ctx, id[:8], "", "p", true); err != nil {
+	if _, err := st.RetireAs(ctx, id[:8], "", "p", &Writer{Author: "s", Staged: true}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(rel); err != nil {

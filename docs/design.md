@@ -28,7 +28,7 @@ All three are markdown files in a local git repository. The files are the record
 
 1. `learn(text, project, kind)`. Empty text, or text with no letter or digit, or text that looks like a secret (a credential assignment, a private key block, a bearer token, a web token, a URL with a password or a well-known token prefix; `kind` is checked too), is refused; the answer names the rule, never the text, and nothing is written. `kind` is optional and informational. Text over 500 characters is cut and the answer says so; the id comes from the full text, so two notes that differ only after the cut are two notes. Saving the same text twice gives the same note.
 2. The service writes `notes/<project>/<id>.md`, updates the index and asks for a commit. **Saving never fails because the embedder is down.** The vector is made afterwards, in the background, outside the write lock (5 second limit); until then recall finds the note by keyword.
-3. `learn(supersedes=id)` deletes the older note it replaces.
+3. `learn(supersedes=id)` deletes the older note it replaces. A staged token may replace or retire only its own unverified notes.
 
 ### 3.2 Recall
 

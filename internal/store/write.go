@@ -23,7 +23,8 @@ func DetID(prefix string, parts ...string) string {
 }
 
 // Writer says who a write is made by when an access token makes it (nil: open mode, no author, no status). A staged
-// writer's notes wait for a check (status unverified) and it may replace or retire only notes that still wait.
+// writer's notes wait for a check (status unverified) and it may replace or retire only notes that still wait and
+// carry its own author name.
 type Writer struct {
 	Author string
 	Staged bool
@@ -72,7 +73,7 @@ func (s *Store) LearnAs(ctx context.Context, text, proj, kind, supersedes string
 			if md.Parse(raw).Str("status") == Unverified {
 				out += " || already stored, and it is unverified: it has not been checked yet"
 			}
-			note, err := s.supersede(tx, strings.TrimSpace(supersedes), proj, id, w != nil && w.Staged)
+			note, err := s.supersede(tx, strings.TrimSpace(supersedes), proj, id, w)
 			if err != nil {
 				return err
 			}
@@ -90,7 +91,7 @@ func (s *Store) LearnAs(ctx context.Context, text, proj, kind, supersedes string
 		if err := tx.Write(rel, md.Render(fm, text)); err != nil {
 			return err
 		}
-		note, err := s.supersede(tx, strings.TrimSpace(supersedes), proj, id, w != nil && w.Staged)
+		note, err := s.supersede(tx, strings.TrimSpace(supersedes), proj, id, w)
 		if err != nil {
 			return err
 		}
@@ -106,8 +107,8 @@ func (s *Store) LearnAs(ctx context.Context, text, proj, kind, supersedes string
 }
 
 // supersede deletes the single note whose id starts with prefix (inside tx) and returns the remark for the caller. A
-// staged writer may replace only a note that is unverified.
-func (s *Store) supersede(tx *Tx, prefix, proj, newID string, staged bool) (string, error) {
+// staged writer may replace only an unverified note of its own.
+func (s *Store) supersede(tx *Tx, prefix, proj, newID string, w *Writer) (string, error) {
 	if prefix == "" {
 		return "", nil
 	}
@@ -127,8 +128,8 @@ func (s *Store) supersede(tx *Tx, prefix, proj, newID string, staged bool) (stri
 	if len(notes) != 1 {
 		return fmt.Sprintf(" || supersedes=%q matched no single note — nothing was marked as replaced", prefix), nil
 	}
-	if staged && fileStatus(s.Repo, notes[0]) != Unverified {
-		return fmt.Sprintf(" || supersedes=%q names a note that is verified, and a staged token may replace only unverified notes — nothing was marked as replaced", prefix), nil
+	if why := stagedRefusal(s.Repo, notes[0], w, "replace"); why != "" {
+		return fmt.Sprintf(" || supersedes=%q: %s — nothing was marked as replaced", prefix, why), nil
 	}
 	if err := tx.Delete(notes[0], proj, "supersede", "->"+newID); errors.Is(err, ErrNotCommitted) {
 		return fmt.Sprintf(" || nothing was replaced, %s: %v; it is still there", ShortID(notes[0]), err), nil
@@ -208,25 +209,36 @@ func (s *Store) resolve(prefix, proj string) (id string, msg string) {
 	return ids[0], ""
 }
 
-// fileStatus is the status in the frontmatter of the file of a node id ("" for an active note, a fact or an unreadable
-// file). The file is the truth: the index may not have caught up with a git pull yet.
-func fileStatus(repo, id string) string {
-	raw, err := os.ReadFile(filepath.Join(repo, filepath.FromSlash(id)+".md"))
-	if err != nil {
+// stagedRefusal says why a staged writer may not change the node, or "" when it may (any other writer may). The file is
+// read for status and author. verb is "replace" or "retire".
+func stagedRefusal(repo, id string, w *Writer, verb string) string {
+	if w == nil || !w.Staged {
 		return ""
 	}
-	return md.Parse(raw).Str("status")
+	raw, err := os.ReadFile(filepath.Join(repo, filepath.FromSlash(id)+".md"))
+	var fm md.Doc
+	if err == nil {
+		fm = md.Parse(raw)
+	}
+	if fm.Str("status") != Unverified {
+		return "a staged token may " + verb + " only unverified notes, and this one is verified or is a fact"
+	}
+	if fm.Str("author") != w.Author {
+		return "this unverified note was written by another agent, and a staged token may " + verb + " only its own notes. " +
+			"Learn a new note instead, and ask the owner to verify or retire the old one"
+	}
+	return ""
 }
 
 // Retire is RetireAs for a caller that may retire anything.
 func (s *Store) Retire(ctx context.Context, prefix, reason, proj string) (string, error) {
-	return s.RetireAs(ctx, prefix, reason, proj, false)
+	return s.RetireAs(ctx, prefix, reason, proj, nil)
 }
 
 // RetireAs deletes a note or fact. The file is removed and the node leaves the index; the text is first put in a commit
 // (see Tx.Delete), and when that is not possible nothing is deleted and the answer says why. A staged caller may
-// delete only a note that is unverified.
-func (s *Store) RetireAs(ctx context.Context, prefix, reason, proj string, staged bool) (string, error) {
+// delete only an unverified note of its own.
+func (s *Store) RetireAs(ctx context.Context, prefix, reason, proj string, w *Writer) (string, error) {
 	proj, err := wiki.OptionalProject(proj)
 	if err != nil {
 		return "", err
@@ -242,8 +254,8 @@ func (s *Store) RetireAs(ctx context.Context, prefix, reason, proj string, stage
 		if err := s.DB.QueryRow(`SELECT project FROM nodes WHERE id=?`, id).Scan(&p); err != nil {
 			return err
 		}
-		if staged && fileStatus(s.Repo, id) != Unverified {
-			out = "a staged token may retire only unverified notes; " + ShortID(id) + " is verified or is a fact — nothing was removed"
+		if why := stagedRefusal(s.Repo, id, w, "retire"); why != "" {
+			out = "not retired " + ShortID(id) + ": " + why + " — nothing was removed"
 			return nil
 		}
 		reason = wiki.Cut(reason, 200)

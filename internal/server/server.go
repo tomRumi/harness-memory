@@ -509,7 +509,7 @@ func (s *Server) Handler() http.Handler {
 					return nil, nil, err
 				}
 				w := writer(r, proj)
-				t, err := s.St.RetireAs(ctx, in.ID, in.Reason, proj, w != nil && w.Staged)
+				t, err := s.St.RetireAs(ctx, in.ID, in.Reason, proj, w)
 				if err != nil {
 					return nil, nil, err
 				}

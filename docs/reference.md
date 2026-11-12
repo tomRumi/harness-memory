@@ -166,8 +166,8 @@ directory holds one file per project, `<project>.json`:
   hit, for example `[memory notes/p/<id> #1a2b3c4d unverified, by name] text`, and so does the hook context block.
   `hms curate -pending` leaves unverified notes out, and `-submit` neither merges nor deletes one: a page that names one
   is stale and everything stays. A repeated `learn` of the same text changes nothing and says if the stored note is
-  unverified (and `supersedes` is still applied). A staged token cannot `fact_add`, and its `retire` and `learn(supersedes)` work only on unverified notes, judged by the note's file:
-  for any other target nothing is deleted and the answer says why (the new note of `learn` is still stored).
+  unverified (and `supersedes` is still applied). A staged token cannot `fact_add`, and its `retire` and `learn(supersedes)` work only on unverified notes that carry its own name as author, judged by the note's file:
+  for any other target (a verified note, a fact, another agent's note) nothing is deleted and the answer says why and what to do (learn a new note, ask the owner to verify or retire the old one). A token that is not staged is unchanged: it may replace or retire any note (the new note of `learn` is still stored).
 - `verify(id, project)` removes `status` from the note and leaves the rest of the file as it was. Open mode may call it;
   in token mode it needs the `verify` right in the project. An active note, an unknown id or an ambiguous one changes
   nothing and the answer says so.

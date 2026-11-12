@@ -233,10 +233,10 @@ SDK's `auth.RequireBearerToken`) and every tool is limited to the projects that 
 | Tool | Purpose |
 |---|---|
 | `recall` | notes, wiki pages and facts together; layer and project filters |
-| `learn` | save a note (project, optional kind label, optional `supersedes` id, which deletes the old note) |
+| `learn` | save a note (project, optional kind label, optional `supersedes` id, which deletes the old note; a staged token may name only its own unverified notes) |
 | `wiki_read` | a page by path or title, with links, backlinks and related pages |
 | `fact_add` | save a durable fact |
-| `retire` | delete a wrong note or fact (its text is committed first) |
+| `retire` | delete a wrong note or fact (its text is committed first); a staged token may delete only its own unverified notes |
 | `verify` | mark an unverified note as checked (token mode: needs the `verify` right) |
 | `list_memory` | list the notes of one project, newest first, optionally only the unverified ones (token mode: any token of the project) |
 | `feedback` | helpful / unhelpful per session; five sessions rating a note unhelpful, none helpful, lists it as a candidate for deletion |

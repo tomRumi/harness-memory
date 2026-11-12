@@ -11,13 +11,14 @@ import (
 	"github.com/tomRumi/harness-memory/internal/index"
 )
 
-// checkedSetup is tokenSetup with four writers in project a: "st" is staged (named scout), "wn" is named alice, "ta"
+// checkedSetup is tokenSetup with five writers in project a: "st" is staged (named scout), "rv" is staged (named reviewer), "wn" is named alice, "ta"
 // has no name, "ver" may verify.
 func checkedSetup(t *testing.T) *tenancy {
 	t.Helper()
 	x := tokenSetup(t)
 	tokenFile(t, x.dir, "a", map[string]string{
 		"st":  `"write":true,"learn_status":"unverified","name":"scout"`,
+		"rv":  `"write":true,"learn_status":"unverified","name":"reviewer"`,
 		"wn":  `"write":true,"name":"alice"`,
 		"ta":  `"write":true`,
 		"ver": `"write":true,"verify":true,"name":"checker"`,
@@ -114,6 +115,46 @@ func TestStagedTokenTouchesOnlyUnverifiedNotes(t *testing.T) {
 		t.Fatalf("an unverified note can be replaced: %q", next)
 	}
 	if out, _ = call(t, st, "retire", map[string]any{"id": next[:8]}); !strings.Contains(out, "deleted") {
+		t.Fatalf("%q", out)
+	}
+}
+
+// A staged token may replace or retire only unverified notes that carry its own name; an admin (non-staged) token any.
+func TestStagedTokenCannotTouchAnotherAgentsNote(t *testing.T) {
+	x := checkedSetup(t)
+	st, rv := x.client(t, "st"), x.client(t, "rv")
+	theirs, _ := call(t, rv, "learn", map[string]any{"text": "The reviewer's unverified finding."})
+	out, isErr := call(t, st, "learn", map[string]any{"text": "The engineer overwrites it.", "supersedes": theirs[:8]})
+	if isErr || !strings.Contains(out, "nothing was marked as replaced") || !strings.Contains(out, "another agent") {
+		t.Fatalf("%v %q", isErr, out)
+	}
+	if out, _ = call(t, st, "retire", map[string]any{"id": theirs[:8]}); strings.Contains(out, "deleted") || !strings.Contains(out, "another agent") {
+		t.Fatalf("%q", out)
+	}
+	before, ok := noteFile(t, x, theirs)
+	if !ok || !strings.Contains(before, "author: reviewer\n") {
+		t.Fatal("the reviewer's note changed or vanished")
+	}
+	if list, _ := call(t, x.client(t, "ver"), "list_memory", map[string]any{"status": "unverified"}); !strings.Contains(list, theirs[:8]) {
+		t.Fatalf("the note is no longer listed:\n%s", list)
+	}
+	// its own note it may replace and retire
+	own, _ := call(t, st, "learn", map[string]any{"text": "The engineer's own draft."})
+	next, _ := call(t, st, "learn", map[string]any{"text": "The engineer's better draft.", "supersedes": own[:8]})
+	if _, ok := noteFile(t, x, own); ok || !strings.Contains(next, "replaced") {
+		t.Fatalf("%q", next)
+	}
+	if out, _ = call(t, st, "retire", map[string]any{"id": next[:8]}); !strings.Contains(out, "deleted") {
+		t.Fatalf("%q", out)
+	}
+	// an admin token may do both to the reviewer's note
+	adm := x.client(t, "wn")
+	repl, _ := call(t, adm, "learn", map[string]any{"text": "Alice replaces the finding.", "supersedes": theirs[:8]})
+	if _, ok := noteFile(t, x, theirs); ok || !strings.Contains(repl, "replaced") {
+		t.Fatalf("%q", repl)
+	}
+	other, _ := call(t, rv, "learn", map[string]any{"text": "Another unverified finding."})
+	if out, _ = call(t, adm, "retire", map[string]any{"id": other[:8]}); !strings.Contains(out, "deleted") {
 		t.Fatalf("%q", out)
 	}
 }
