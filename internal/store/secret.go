@@ -17,10 +17,11 @@ var secretRules = []struct {
 	re    *regexp.Regexp
 	judge func(string) bool
 }{
+	// Also the quoted forms: define('DB_PASSWORD', 'x'), "password": "x" and 'password' => 'x'.
 	// The key word must end the identifier (so "tokens:" and "tokenizer:" pass); a value is a secret only if it has a digit
 	// and, when it looks like a path or a domain, also mixed case. This lets vault entry names, paths and placeholders through.
 	{"credential assignment", regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])` + strings.Replace(credentialWords, "API_?KEY", "API[_ ]?KEY", 1) +
-		`(?:_[A-Za-z0-9_]*)?\s*[:=]\s*["']?([A-Za-z0-9/+_.=-]{16,})`), looksLikeSecretValue},
+		`(?:_[A-Za-z0-9_]*)?(?:["']\s*,\s*["']|["']?\s*(?:=>|[:=])\s*["']?)([A-Za-z0-9/+_.=-]{16,})`), looksLikeSecretValue},
 	{"private key block", regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY( BLOCK)?-----|PuTTY-User-` + `Key-File`), nil},
 	{"bearer token", regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{20,}`), nil},
 	{"token prefix", regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9]{20,}|\bgithub_pat_[A-Za-z0-9_]{20,}|\bglpat-[A-Za-z0-9_-]{20,}|\b[sr]k_(live|test)_[A-Za-z0-9]{16,}|\bxox[abprs]-[A-Za-z0-9-]{10,}|\bAKIA[0-9A-Z]{16}\b|\bAIza[0-9A-Za-z_-]{35}`), nil},

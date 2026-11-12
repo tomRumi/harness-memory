@@ -10,22 +10,25 @@ import (
 
 // The samples are joined from pieces so this file does not trip the repository's own leak check.
 var secretSamples = map[string]string{
-	"credential assignment":        "the site login is set with API" + "_KEY=" + "abcd1234efgh5678ijkl",
-	"token prefix #gl":             "ci uses glp" + "at-abcdefghij0123456789",
-	"token prefix #ghpat":          "github_p" + "at_abcdefghij0123456789ABCD",
-	"token prefix #live":           "billing sk" + "_live_abcdefghij0123456789",
-	"token prefix #aiza":           "maps AI" + "zaSyA-abcdefghij0123456789abcdefghijk",
-	"credential assignment #space": "the api k" + "ey: abcd1234efgh5678ijkl",
-	"credential assignment #url":   "call https://example.invalid/cb?tok" + "en=Ab3dEf6hIj9lMn2pQr5tUv",
-	"credential assignment #b64":   "AWS_SECRET_ACCESS" + "_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYzzzzzzzzzz",
-	"web token":                    "session eyJ" + "hbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkw.abcdefghijKLMNOP",
-	"url credentials":              "db at postgres://app:" + "s3cretPass1@db.example.invalid/main",
-	"private key block":            "key follows: -----BEGIN RSA PRIVATE" + " KEY----- MIIEow",
-	"bearer token":                 "send header Authorization: Bearer " + "abcdefghij0123456789ABCDEF",
-	"token prefix":                 "use sk" + "-abcdefghij0123456789abcd for the service",
-	"token prefix #gh":             "pushed with gh" + "p_abcdefghij0123456789abcdefghij0123",
-	"token prefix #xox":            "bot is xox" + "b-1234567890-abcdefghij",
-	"token prefix #aws":            "id AK" + "IAABCDEFGHIJKLMNOP",
+	"credential assignment":         "the site login is set with API" + "_KEY=" + "abcd1234efgh5678ijkl",
+	"token prefix #gl":              "ci uses glp" + "at-abcdefghij0123456789",
+	"token prefix #ghpat":           "github_p" + "at_abcdefghij0123456789ABCD",
+	"token prefix #live":            "billing sk" + "_live_abcdefghij0123456789",
+	"token prefix #aiza":            "maps AI" + "zaSyA-abcdefghij0123456789abcdefghijk",
+	"credential assignment #space":  "the api k" + "ey: abcd1234efgh5678ijkl",
+	"credential assignment #url":    "call https://example.invalid/cb?tok" + "en=Ab3dEf6hIj9lMn2pQr5tUv",
+	"credential assignment #define": "define('DB_PASS" + "WORD', 'Xk29fjq0Lmz81PqR');",
+	"credential assignment #json":   "{\"pass" + "word\": \"Xk29fjq0Lmz81PqR\"}",
+	"credential assignment #arrow":  "'pass" + "word' => 'Xk29fjq0Lmz81PqR',",
+	"credential assignment #b64":    "AWS_SECRET_ACCESS" + "_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYzzzzzzzzzz",
+	"web token":                     "session eyJ" + "hbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkw.abcdefghijKLMNOP",
+	"url credentials":               "db at postgres://app:" + "s3cretPass1@db.example.invalid/main",
+	"private key block":             "key follows: -----BEGIN RSA PRIVATE" + " KEY----- MIIEow",
+	"bearer token":                  "send header Authorization: Bearer " + "abcdefghij0123456789ABCDEF",
+	"token prefix":                  "use sk" + "-abcdefghij0123456789abcd for the service",
+	"token prefix #gh":              "pushed with gh" + "p_abcdefghij0123456789abcdefghij0123",
+	"token prefix #xox":             "bot is xox" + "b-1234567890-abcdefghij",
+	"token prefix #aws":             "id AK" + "IAABCDEFGHIJKLMNOP",
 }
 
 var secretControls = []string{
@@ -47,6 +50,10 @@ var secretControls = []string{
 	"api" + "_key: YOUR_API_KEY_GOES_HERE",
 	"the spinner class is sk-loading-spinner-container-wide",
 	"set API_KEY in .env",
+	"define('WP_DEBUG', false);",
+	"define('DB_NAME', 'wordpress');",
+	"define('DB_PASS" + "WORD', 'wordpress');",
+	"{\"pass" + "word\": \"projects/site/wp-admin-login\"}",
 	"postgres://user:${DB_PASSWORD}@db.example.invalid/main",
 }
 
